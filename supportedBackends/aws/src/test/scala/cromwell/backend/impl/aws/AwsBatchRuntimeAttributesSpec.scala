@@ -42,7 +42,6 @@ import eu.timepit.refined.refineMV
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 import org.slf4j.helpers.NOPLogger
-import software.amazon.awssdk.services.batch.model.RetryAction
 import spray.json._
 import wdl4s.parser.MemoryUnit
 import wom.format.MemorySize

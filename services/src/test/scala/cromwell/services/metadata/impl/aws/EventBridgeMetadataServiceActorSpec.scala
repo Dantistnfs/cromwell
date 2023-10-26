@@ -35,7 +35,7 @@ class AwsEventBridgeMetadataServiceActorSpec extends ServicesSpec {
   }
 }
 
-object AwsSnsMetadataServiceActorSpec {
+object AwsEventBridgeMetadataServiceActorSpec {
 
   // This doesn't include a topic so should be a failure
   val emptyConfig: Config = ConfigFactory.empty()
