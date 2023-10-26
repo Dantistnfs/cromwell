@@ -62,6 +62,16 @@ object AwsBatchTestConfig {
       |    queueArn: "arn:aws:batch:us-east-1:111222333444:job-queue/job-queue"
       |    scriptBucketName: "my-bucket"
       |    awsBatchRetryAttempts: 1
+      |    awsBatchEvaluateOnExit: [
+      |     {
+      |       action: "RETRY",
+      |       onStatusReason: "Host EC2*"
+      |     },
+      |     {
+      |  		  onReason : "*"
+      |       action: "EXIT"
+      |     }
+      |    ]
       |}
       |
       |""".stripMargin

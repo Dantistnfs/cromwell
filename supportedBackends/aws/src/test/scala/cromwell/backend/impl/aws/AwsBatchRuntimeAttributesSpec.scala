@@ -42,6 +42,7 @@ import eu.timepit.refined.refineMV
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 import org.slf4j.helpers.NOPLogger
+import software.amazon.awssdk.services.batch.model.RetryAction
 import spray.json._
 import wdl4s.parser.MemoryUnit
 import wom.format.MemorySize
@@ -186,9 +187,9 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
       assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedRuntimeAttributes)
     }
     "validate a valid Filesystem string entry local Filesystem" in {
-      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"),"scriptBucketName" -> WomString(""), "filesystem" -> WomString("local"))
+      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "scriptBucketName" -> WomString(""), "filesystem" -> WomString("local"))
       val expectedRuntimeAttributes = expectedDefaultsLocalFS
-      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedRuntimeAttributes,WorkflowOptions.fromMap(Map.empty).get,
+      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedRuntimeAttributes, WorkflowOptions.fromMap(Map.empty).get,
         NonEmptyList.of("us-east-1a", "us-east-1b"), new AwsBatchConfiguration(AwsBatchTestConfigForLocalFS.AwsBatchBackendConfigurationDescriptor))
     }
 
@@ -302,7 +303,7 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     }
 
     "override config default attributes with default attributes declared in workflow options" in {
-      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "scriptBucketName" -> WomString("my-stuff") )
+      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "scriptBucketName" -> WomString("my-stuff"))
 
       val workflowOptionsJson =
         """{
@@ -316,7 +317,7 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     }
 
     "override config default runtime attributes with task runtime attributes" in {
-      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "scriptBucketName" -> WomString("my-stuff"),  "cpu" -> WomInteger(4))
+      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "scriptBucketName" -> WomString("my-stuff"), "cpu" -> WomInteger(4))
 
       val workflowOptionsJson =
         """{
@@ -330,7 +331,7 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     }
 
     "override invalid config default attributes with task runtime attributes" in {
-      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"),"scriptBucketName" -> WomString("my-stuff"),  "cpu" -> WomInteger(4))
+      val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "scriptBucketName" -> WomString("my-stuff"), "cpu" -> WomInteger(4))
 
       val workflowOptionsJson =
         """{
@@ -367,6 +368,22 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     "validate zero as awsBatchRetryAttempts entry" in {
       val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "awsBatchRetryAttempts" -> WomInteger(0), "scriptBucketName" -> WomString("my-stuff"))
       val expectedRuntimeAttributes = expectedDefaults.copy(awsBatchRetryAttempts = 0)
+      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedRuntimeAttributes)
+    }
+
+    "validate a valid awsBatchEvaluateOnExit " in {
+      val expectedRetryStrategy = Map("action" -> "RETRY", "onExitCode" -> "*")
+      val runtimeAttributes = Map(
+        "docker" -> WomString("ubuntu:latest"),
+        "awsBatchRetryAttempts" -> WomInteger(0),
+        "scriptBucketName" -> WomString("my-stuff"),
+        "awsBatchEvaluateOnExit" -> WomArray(
+          Seq(WomMap(Map(WomString("action") -> WomString("RETRY"), WomString("onExitCode") -> WomString("*")))
+          )
+        )
+      )
+
+      val expectedRuntimeAttributes = expectedDefaults.copy(awsBatchEvaluateOnExit = Vector(expectedRetryStrategy))
       assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedRuntimeAttributes)
     }
   }

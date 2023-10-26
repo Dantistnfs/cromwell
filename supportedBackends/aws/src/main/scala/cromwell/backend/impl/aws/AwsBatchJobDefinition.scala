@@ -34,7 +34,7 @@ package cromwell.backend.impl.aws
 import scala.collection.mutable.ListBuffer
 import cromwell.backend.BackendJobDescriptor
 import cromwell.backend.io.JobPaths
-import software.amazon.awssdk.services.batch.model.{ContainerProperties, Host, KeyValuePair, MountPoint, ResourceRequirement, ResourceType, RetryStrategy, Ulimit, Volume}
+import software.amazon.awssdk.services.batch.model.{ContainerProperties, EvaluateOnExit, Host, KeyValuePair, MountPoint, ResourceRequirement, ResourceType, RetryAction, RetryStrategy, Ulimit, Volume}
 import cromwell.backend.impl.aws.io.AwsBatchVolume
 
 import scala.jdk.CollectionConverters._
@@ -178,8 +178,31 @@ trait AwsBatchJobDefinitionBuilder {
 
   def retryStrategyBuilder(context: AwsBatchJobDefinitionContext): (RetryStrategy.Builder, String) = {
     // We can add here the 'evaluateOnExit' statement
-    (RetryStrategy.builder()
-      .attempts(context.runtimeAttributes.awsBatchRetryAttempts),
+    var builder = RetryStrategy.builder()
+      .attempts(context.runtimeAttributes.awsBatchRetryAttempts)
+
+    val evaluations: Seq[EvaluateOnExit] = Seq()
+    context.runtimeAttributes.awsBatchEvaluateOnExit.foreach(
+      (evaluate) => {
+        val evaluateBuilder = evaluate.foldLeft(EvaluateOnExit.builder()) {
+          case (acc, (k, v)) => (k, v) match {
+            case ("action", "RETRY") => acc.action(RetryAction.RETRY)
+            case ("action", "EXIT") => acc.action(RetryAction.EXIT)
+            case ("onExitCode", _) => acc.onExitCode(v)
+            case ("onReason", _) => acc.onReason(v)
+            case ("onStatusReason", _) => acc.onStatusReason(v)
+            case _ => acc
+          }
+        }
+        evaluations :+ evaluateBuilder.build()
+      }
+    )
+
+    if (evaluations.nonEmpty) {
+      builder = builder.evaluateOnExit(evaluations.asJava)
+    }
+
+    (builder,
      context.runtimeAttributes.awsBatchRetryAttempts.toString)
   }
 
