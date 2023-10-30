@@ -64,12 +64,12 @@ object AwsBatchTestConfig {
       |    awsBatchRetryAttempts: 1
       |    awsBatchEvaluateOnExit: [
       |     {
-      |       action: "RETRY",
+      |       Action: "RETRY",
       |       onStatusReason: "Host EC2*"
       |     },
       |     {
       |  		  onReason : "*"
-      |       action: "EXIT"
+      |       Action: "EXIT"
       |     }
       |    ]
       |}

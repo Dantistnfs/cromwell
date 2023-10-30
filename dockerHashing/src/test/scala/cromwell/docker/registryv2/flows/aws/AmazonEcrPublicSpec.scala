@@ -12,20 +12,19 @@ import org.mockito.Mockito._
 import org.scalatest.{BeforeAndAfter, PrivateMethodTester}
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
-import org.scalatestplus.mockito.MockitoSugar
 import software.amazon.awssdk.services.ecrpublic.model.{AuthorizationData, GetAuthorizationTokenRequest, GetAuthorizationTokenResponse}
 import software.amazon.awssdk.services.ecrpublic.EcrPublicClient
 
-class AmazonEcrPublicSpec extends TestKitSuite with AnyFlatSpecLike with Matchers with MockitoSugar with BeforeAndAfter with PrivateMethodTester {
+class AmazonEcrPublicSpec extends TestKitSuite with AnyFlatSpecLike with Matchers with BeforeAndAfter with PrivateMethodTester {
   behavior of "AmazonEcrPublic"
 
   val goodUri = "public.ecr.aws/amazonlinux/amazonlinux:latest"
   val otherUri = "ubuntu:latest"
 
 
-  val mediaType: MediaType = MediaType.parse(DockerRegistryV2Abstract.ManifestV2MediaType).right.get
+  val mediaType: MediaType = MediaType.parse(DockerRegistryV2Abstract.ManifestV2MediaType).toOption.get
   val contentType: Header = `Content-Type`(mediaType)
-  val mockEcrClient: EcrPublicClient = mock[EcrPublicClient]
+  val mockEcrClient: EcrPublicClient = mock(classOf[EcrPublicClient])
   implicit val mockIOClient: Client[IO] = Client({ _: Request[IO] =>
     // This response will have an empty body, so we need to be explicit about the typing:
     Resource.pure[IO, Response[IO]](Response(headers = Headers.of(contentType))) : Resource[IO, Response[IO]]
@@ -44,7 +43,7 @@ class AmazonEcrPublicSpec extends TestKitSuite with AnyFlatSpecLike with Matcher
   }
 
   it should "have public.ecr.aws as registryHostName" in {
-    val registryHostNameMethod = PrivateMethod[String]('registryHostName)
+    val registryHostNameMethod = PrivateMethod[String](Symbol("registryHostName"))
     registry invokePrivate registryHostNameMethod(DockerImageIdentifier.fromString(goodUri).get) shouldEqual "public.ecr.aws"
   }
 
@@ -63,7 +62,7 @@ class AmazonEcrPublicSpec extends TestKitSuite with AnyFlatSpecLike with Matcher
           .build())
         .build)
 
-    val getTokenMethod = PrivateMethod[IO[Option[String]]]('getToken)
+    val getTokenMethod = PrivateMethod[IO[Option[String]]](Symbol("getToken"))
     registry invokePrivate getTokenMethod(context, mockIOClient) ensuring(io => io.unsafeRunSync().get == token)
   }
 }

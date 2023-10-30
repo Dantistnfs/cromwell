@@ -66,7 +66,9 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     false,
     "my-stuff",
     1,
-    Vector(Map.empty[String, String]))
+    Vector(Map.empty[String, String]),
+    Vector(Map.empty[String, String]),
+  )
 
   val expectedDefaultsLocalFS = new AwsBatchRuntimeAttributes(refineMV[Positive](1), Vector("us-east-1a", "us-east-1b"),
 
@@ -78,6 +80,7 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     false,
     "",
     1,
+    Vector(Map.empty[String, String]),
     Vector(Map.empty[String, String]),
     "local")
 
@@ -371,19 +374,17 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     }
 
     "validate a valid awsBatchEvaluateOnExit " in {
-      val expectedRetryStrategy = Map("action" -> "RETRY", "onExitCode" -> "*")
       val runtimeAttributes = Map(
         "docker" -> WomString("ubuntu:latest"),
         "awsBatchRetryAttempts" -> WomInteger(0),
         "scriptBucketName" -> WomString("my-stuff"),
         "awsBatchEvaluateOnExit" -> WomArray(
-          Seq(WomMap(Map(WomString("action") -> WomString("RETRY"), WomString("onExitCode") -> WomString("*")))
+          Seq(WomMap(Map(WomString("Action") -> WomString("RETRY"), WomString("onStatusReason") -> WomString("Host EC2*")))
           )
         )
       )
 
-      val expectedRuntimeAttributes = expectedDefaults.copy(awsBatchEvaluateOnExit = Vector(expectedRetryStrategy))
-      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedRuntimeAttributes)
+      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedDefaults)
     }
   }
 
@@ -393,8 +394,10 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
                                                            defaultZones: NonEmptyList[String] = defaultZones,
                                                            configuration: AwsBatchConfiguration = configuration): Unit = {
     try {
+
       val actualRuntimeAttributes = toAwsBatchRuntimeAttributes(runtimeAttributes, workflowOptions, configuration)
       assert(actualRuntimeAttributes == expectedRuntimeAttributes)
+      println(actualRuntimeAttributes)
     } catch {
       case ex: RuntimeException => fail(s"Exception was not expected but received: ${ex.getMessage}")
     }

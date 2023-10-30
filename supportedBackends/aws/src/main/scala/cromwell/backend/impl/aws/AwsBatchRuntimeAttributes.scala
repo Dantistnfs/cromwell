@@ -88,7 +88,7 @@ object AwsBatchRuntimeAttributes {
 
   val awsBatchEvaluateOnExit = "awsBatchEvaluateOnExit"
   // retry on all
-  private val awsBatchEvaluateOnExitDefault = WomArray(WomMaybeEmptyArrayType(WomMapType(WomStringType,WomStringType)), Vector())
+  private val awsBatchEvaluateOnExitDefault = WomArray(WomArrayType(WomMapType(WomStringType,WomStringType)), Vector(WomMap(Map.empty[WomValue, WomValue])))
 
 
   val ZonesKey = "zones"
@@ -155,7 +155,7 @@ object AwsBatchRuntimeAttributes {
   }
 
   private def awsBatchEvaluateOnExitValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[Map[String, String ]]] =
-    AwsBatchEvaluateOnExitValidation.withDefault(AwsBatchEvaluateOnExitValidation.configDefaultWomValue(runtimeConfig) getOrElse awsBatchEvaluateOnExitDefault)
+    AwsBatchEvaluateOnExitValidation(awsBatchEvaluateOnExit).withDefault(AwsBatchEvaluateOnExitValidation(awsBatchEvaluateOnExit).configDefaultWomValue(runtimeConfig) getOrElse awsBatchEvaluateOnExitDefault)
 
   private def ulimitsValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[Map[String, String]]] =
    UlimitsValidation.withDefault(UlimitsValidation.configDefaultWomValue(runtimeConfig) getOrElse UlimitsDefaultValue)
@@ -174,6 +174,7 @@ object AwsBatchRuntimeAttributes {
                         queueArnValidation(runtimeConfig),
                         scriptS3BucketNameValidation(runtimeConfig),
                         awsBatchRetryAttemptsValidation(runtimeConfig),
+                        awsBatchEvaluateOnExitValidation(runtimeConfig),
                         ulimitsValidation(runtimeConfig),
                       )
    def validationsLocalBackend  = StandardValidatedRuntimeAttributesBuilder.default(runtimeConfig).withValidation(
@@ -187,6 +188,7 @@ object AwsBatchRuntimeAttributes {
       dockerValidation,
       queueArnValidation(runtimeConfig),
       awsBatchRetryAttemptsValidation(runtimeConfig),
+     awsBatchEvaluateOnExitValidation(runtimeConfig),
       ulimitsValidation(runtimeConfig)
     )
 
@@ -429,11 +431,15 @@ class AwsBatchRetryAttemptsValidation(key: String) extends IntRuntimeAttributesV
   override protected def missingValueMessage: String = s"Expecting $key runtime attribute to be an Integer"
 }
 
-object AwsBatchEvaluateOnExitValidation extends RuntimeAttributesValidation[Vector[Map[String, String]]] {
+object AwsBatchEvaluateOnExitValidation {
+  def apply(key: String): AwsBatchEvaluateOnExitValidation = new AwsBatchEvaluateOnExitValidation(key)
+}
 
-  override def key: String = AwsBatchRuntimeAttributes.awsBatchEvaluateOnExit
 
-  var acceptedKeys = Set("Action", " OnExitCode", " OnReason", "  OnStatusReason")
+class AwsBatchEvaluateOnExitValidation(override  val key: String) extends RuntimeAttributesValidation[Vector[Map[String, String]]] {
+
+
+  var accepted_keys = Set("Action", "OnExitCode", "OnReason", "onStatusReason")
 
   override def coercion: Iterable[WomType] = {
     Set(WomStringType, WomArrayType(WomMapType(WomStringType, WomStringType)))
@@ -464,12 +470,12 @@ object AwsBatchEvaluateOnExitValidation extends RuntimeAttributesValidation[Vect
                         ): ErrorOr[Map[String, String]] = {
     val map_keys = dict.keySet.map(_.valueString).toSet
     val unrecognizedKeys =
-      acceptedKeys.diff(map_keys) union map_keys.diff(acceptedKeys)
+      map_keys.diff(accepted_keys)
 
     if (!dict.nonEmpty) {
       Map.empty[String, String].validNel
     } else if (unrecognizedKeys.nonEmpty) {
-      s"Invalid keys in $key runtime attribute. Refer to 'ulimits' section on https://docs.aws.amazon.com/batch/latest/userguide/job_definition_parameters.html#containerProperties".invalidNel
+      s"Invalid keys in $key runtime attribute: $unrecognizedKeys. $accepted_keys $map_keys Refer to 'retyry'".invalidNel
     } else {
       dict
         .collect { case (WomString(k), WomString(v)) =>
@@ -494,7 +500,7 @@ object AwsBatchEvaluateOnExitValidation extends RuntimeAttributesValidation[Vect
   }
 
 
-  override protected def missingValueMessage: String = s"Expecting $key runtime attribute to be an Integer"
+  override protected def missingValueMessage: String = s"Expecting $key runtime attribute to be defined"
 }
 object UlimitsValidation
     extends RuntimeAttributesValidation[Vector[Map[String, String]]] {
@@ -535,7 +541,7 @@ object UlimitsValidation
       accepted_keys.diff(map_keys) union map_keys.diff(accepted_keys)
 
     if (!dict.nonEmpty){
-      Map.empty[String, String].validNel  
+      Map.empty[String, String].validNel
     }else if (unrecognizedKeys.nonEmpty) {
       s"Invalid keys in $key runtime attribute. Refer to 'ulimits' section on https://docs.aws.amazon.com/batch/latest/userguide/job_definition_parameters.html#containerProperties".invalidNel
     } else {
