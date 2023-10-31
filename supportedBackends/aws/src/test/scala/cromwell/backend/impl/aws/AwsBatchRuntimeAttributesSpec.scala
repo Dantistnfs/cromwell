@@ -379,12 +379,15 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
         "awsBatchRetryAttempts" -> WomInteger(0),
         "scriptBucketName" -> WomString("my-stuff"),
         "awsBatchEvaluateOnExit" -> WomArray(
-          Seq(WomMap(Map(WomString("Action") -> WomString("RETRY"), WomString("onStatusReason") -> WomString("Host EC2*")))
+          Seq(WomMap(Map(WomString("action") -> WomString("RETRY"), WomString("onStatusReason") -> WomString("Host EC2*")))
           )
         )
       )
 
-      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedDefaults)
+      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedDefaults.copy(
+        awsBatchRetryAttempts = 0,
+        awsBatchEvaluateOnExit = Vector(Map("action" -> "RETRY", "onStatusReason" -> "Host EC2*"))
+      ))
     }
   }
 
@@ -397,7 +400,6 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
 
       val actualRuntimeAttributes = toAwsBatchRuntimeAttributes(runtimeAttributes, workflowOptions, configuration)
       assert(actualRuntimeAttributes == expectedRuntimeAttributes)
-      println(actualRuntimeAttributes)
     } catch {
       case ex: RuntimeException => fail(s"Exception was not expected but received: ${ex.getMessage}")
     }

@@ -32,7 +32,7 @@
 package cromwell.backend.impl.aws
 
 import common.collections.EnhancedCollections._
-import cromwell.backend.{BackendJobDescriptorKey, BackendWorkflowDescriptor}
+import cromwell.backend.{BackendJobDescriptor, BackendJobDescriptorKey, BackendWorkflowDescriptor}
 import cromwell.backend.BackendSpec._
 import cromwell.backend.impl.aws.io.AwsBatchWorkingDisk
 import cromwell.backend.validation.ContinueOnReturnCodeFlag
@@ -42,15 +42,18 @@ import cromwell.util.SampleWdl
 import eu.timepit.refined.api.Refined
 import eu.timepit.refined.auto._
 import eu.timepit.refined.numeric._
+import org.mockito.Mockito.mock
 import org.scalatest.PrivateMethodTester
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider
-import software.amazon.awssdk.services.batch.model.{ContainerDetail, JobDetail, KeyValuePair}
+import software.amazon.awssdk.services.batch.model.{ContainerDetail, JobDetail, KeyValuePair, RetryStrategy}
 import spray.json.{JsObject, JsString}
 import wdl4s.parser.MemoryUnit
 import wom.format.MemorySize
 import wom.graph.CommandCallNode
+
+import scala.List
 
 class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers with PrivateMethodTester {
   import AwsBatchTestConfig._
@@ -346,6 +349,41 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
     val job = generateBasicJob
     job.rc(jobDetail) should be (0)
   }
+
+  it should "use retry stratgeg" in {
+
+    val runtime = new AwsBatchRuntimeAttributes(
+      cpu = cpu,
+      zones = Vector("us-east-1"),
+      memory = MemorySize(2.0, MemoryUnit.GB),
+      disks = Seq.empty,
+      dockerImage = "ubuntu:latest",
+      queueArn = "arn:aws:batch:us-east-1:123456789:job-queue/default-gwf-core",
+      failOnStderr = true,
+      continueOnReturnCode = ContinueOnReturnCodeFlag(false),
+      noAddress = false,
+      scriptS3BucketName = "script-bucket",
+      awsBatchRetryAttempts = 1,
+      awsBatchEvaluateOnExit = Vector(Map("Action" -> "EXIT", "onStatusReason" -> "lol")),
+      ulimits = Vector(Map.empty[String, String]),
+      fileSystem = "s3")
+
+    val jobDescriptor = BackendJobDescriptor(null, null, null, Map.empty, null, null, null)
+
+    val job_def = AwsBatchJobDefinitionContext(
+      runtimeAttributes =  runtime,
+      commandText = "", dockerRcPath = "", dockerStdoutPath = "", dockerStderrPath = "", jobDescriptor = jobDescriptor
+      , jobPaths =     AwsBatchJobPaths(mock(classOf[AwsBatchWorkflowPaths]), jobKey), inputs = Set(), outputs = Set(), fsxMntPoint = None
+
+    )
+    val builder = RetryStrategy.builder().build()
+    val expected = StandardAwsBatchJobDefinitionBuilder.build(job_def).retryStrategy
+
+    expected should equal (builder)
+
+
+  }
+
 
 
 

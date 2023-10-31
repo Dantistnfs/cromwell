@@ -181,7 +181,7 @@ trait AwsBatchJobDefinitionBuilder {
     var builder = RetryStrategy.builder()
       .attempts(context.runtimeAttributes.awsBatchRetryAttempts)
 
-    val evaluations: Seq[EvaluateOnExit] = Seq()
+    var evaluations: Seq[EvaluateOnExit] = Seq()
     context.runtimeAttributes.awsBatchEvaluateOnExit.foreach(
       (evaluate) => {
         val evaluateBuilder = evaluate.foldLeft(EvaluateOnExit.builder()) {
@@ -194,7 +194,7 @@ trait AwsBatchJobDefinitionBuilder {
             case _ => acc
           }
         }
-        evaluations :+ evaluateBuilder.build()
+        evaluations = evaluations :+ evaluateBuilder.build()
       }
     )
 
@@ -202,8 +202,14 @@ trait AwsBatchJobDefinitionBuilder {
       builder = builder.evaluateOnExit(evaluations.asJava)
     }
 
+    builder = builder.evaluateOnExit(
+      EvaluateOnExit.builder().action("RETRY").onReason("asdasdasda").build()
+    )
+
+    println(evaluations)
+
     (builder,
-     context.runtimeAttributes.awsBatchRetryAttempts.toString)
+     s"${context.runtimeAttributes.awsBatchRetryAttempts.toString}${context.runtimeAttributes.awsBatchEvaluateOnExit.toString}")
   }
 
 
