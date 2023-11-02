@@ -198,15 +198,7 @@ trait AwsBatchJobDefinitionBuilder {
       }
     )
 
-    if (evaluations.nonEmpty) {
-      builder = builder.evaluateOnExit(evaluations.asJava)
-    }
-
-    builder = builder.evaluateOnExit(
-      EvaluateOnExit.builder().action("RETRY").onReason("asdasdasda").build()
-    )
-
-    println(evaluations)
+    builder = builder.evaluateOnExit(evaluations.asJava)
 
     (builder,
      s"${context.runtimeAttributes.awsBatchRetryAttempts.toString}${context.runtimeAttributes.awsBatchEvaluateOnExit.toString}")
