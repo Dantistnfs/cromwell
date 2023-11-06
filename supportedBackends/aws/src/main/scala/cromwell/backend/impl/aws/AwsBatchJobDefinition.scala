@@ -185,12 +185,12 @@ trait AwsBatchJobDefinitionBuilder {
     context.runtimeAttributes.awsBatchEvaluateOnExit.foreach(
       (evaluate) => {
         val evaluateBuilder = evaluate.foldLeft(EvaluateOnExit.builder()) {
-          case (acc, (k, v)) => (k, v) match {
-            case ("action", "RETRY") => acc.action(RetryAction.RETRY)
-            case ("action", "EXIT") => acc.action(RetryAction.EXIT)
-            case ("onExitCode", _) => acc.onExitCode(v)
-            case ("onReason", _) => acc.onReason(v)
-            case ("onStatusReason", _) => acc.onStatusReason(v)
+          case (acc, (k, v)) => (k.toLowerCase, v.toLowerCase) match {
+            case ("action", "retry") => acc.action(RetryAction.RETRY)
+            case ("action", "exit") => acc.action(RetryAction.EXIT)
+            case ("onexitcode", _) => acc.onExitCode(v)
+            case ("onreason", _) => acc.onReason(v)
+            case ("onstatusreason", _) => acc.onStatusReason(v)
             case _ => acc
           }
         }

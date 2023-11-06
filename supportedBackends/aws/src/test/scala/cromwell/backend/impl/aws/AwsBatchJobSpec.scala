@@ -42,12 +42,11 @@ import cromwell.util.SampleWdl
 import eu.timepit.refined.api.Refined
 import eu.timepit.refined.auto._
 import eu.timepit.refined.numeric._
-import org.mockito.Mockito.mock
 import org.scalatest.PrivateMethodTester
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider
-import software.amazon.awssdk.services.batch.model.{ContainerDetail, JobDetail, KeyValuePair, RetryStrategy}
+import software.amazon.awssdk.services.batch.model.{ContainerDetail, EvaluateOnExit, JobDetail, KeyValuePair, RetryAction, RetryStrategy}
 import spray.json.{JsObject, JsString}
 import wdl4s.parser.MemoryUnit
 import wom.format.MemorySize
@@ -364,7 +363,7 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
       noAddress = false,
       scriptS3BucketName = "script-bucket",
       awsBatchRetryAttempts = 1,
-      awsBatchEvaluateOnExit = Vector(Map("Action" -> "EXIT", "onStatusReason" -> "lol")),
+      awsBatchEvaluateOnExit = Vector(Map("action" -> "EXIT", "onStatusReason" -> "lol")),
       ulimits = Vector(Map.empty[String, String]),
       fileSystem = "s3")
 
@@ -373,15 +372,17 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
     val job_def = AwsBatchJobDefinitionContext(
       runtimeAttributes =  runtime,
       commandText = "", dockerRcPath = "", dockerStdoutPath = "", dockerStderrPath = "", jobDescriptor = jobDescriptor
-      , jobPaths =     AwsBatchJobPaths(mock(classOf[AwsBatchWorkflowPaths]), jobKey), inputs = Set(), outputs = Set(), fsxMntPoint = None
+      , jobPaths =     jobPaths, inputs = Set(), outputs = Set(), fsxMntPoint = None
 
     )
-    val builder = RetryStrategy.builder().build()
-    val expected = StandardAwsBatchJobDefinitionBuilder.build(job_def).retryStrategy
-
+    val builder = RetryStrategy.builder().attempts(1).evaluateOnExit(
+      EvaluateOnExit.builder().onStatusReason("lol").action(RetryAction.EXIT).build()
+    ).build()
+    val jobDefinition = StandardAwsBatchJobDefinitionBuilder.build(job_def)
+    val jobDefinitionName = jobDefinition.name
+    val expected = jobDefinition.retryStrategy
     expected should equal (builder)
-
-
+    jobDefinitionName should equal ("cromwell_ubuntu_latest_60df4f83c7776bca42bc2be49779240a25ad437a")
   }
 
 

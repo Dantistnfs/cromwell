@@ -48,6 +48,8 @@ import wom.format.MemorySize
 import wom.types._
 import wom.values._
 
+import scala.util.{Failure, Success, Try}
+
 class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeoutSpec with Matchers {
 
   def workflowOptionsWithDefaultRA(defaults: Map[String, JsValue]): WorkflowOptions = {
@@ -389,6 +391,52 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
         awsBatchEvaluateOnExit = Vector(Map("action" -> "RETRY", "onStatusReason" -> "Host EC2*"))
       ))
     }
+
+    "if awsBatchEvaluteOnExit is empty, do not fail" in {
+      val runtimeAttributes = Map(
+        "docker" -> WomString("ubuntu:latest"),
+        "awsBatchRetryAttempts" -> WomInteger(0),
+        "scriptBucketName" -> WomString("my-stuff"),
+        "awsBatchEvaluateOnExit" -> WomArray(WomArrayType(WomMapType(WomStringType,WomStringType)), Vector(WomMap(Map.empty[WomValue, WomValue])))
+      )
+      assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedDefaults.copy(
+        awsBatchRetryAttempts = 0,
+      ))
+    }
+
+    "missing or invalid action key result in an invalid awsBatchEvaluateOnExit" in {
+      val invalidEvaluateOnExit = List(
+        // missing action key
+        WomArray(
+          Seq(WomMap(Map(WomString("onStatusReason") -> WomString("Host EC2*")))
+          )
+        ),
+        // invalid value
+        WomArray(
+          Seq(WomMap(Map(WomString("action") -> WomString("TRYAGAIN"), WomString("onStatusReason") -> WomString("Host EC2*")))
+          )
+        )
+      )
+
+      invalidEvaluateOnExit foreach { invalidVal =>
+        val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "awsBatchEvaluateOnExit" -> invalidVal)
+        assertAwsBatchRuntimeAttributesFailedCreation(runtimeAttributes,
+          "Missing or invalid action key/value for runtime attribute: awsBatchEvaluateOnExit")
+      }
+    }
+  }
+
+  "Unrecognized keys for retry strategy should result in an invalid awsBatchEvaluateOnExit" in {
+    // invalid key
+    val invalidValue = WomArray(
+      Seq(WomMap(Map(WomString("action") -> WomString("RETRY"), WomString("onRandomStatus") -> WomString("Host EC2*")))
+      )
+    )
+    val runtimeAttributes = Map("docker" -> WomString("ubuntu:latest"), "awsBatchEvaluateOnExit" -> invalidValue)
+    assertAwsBatchRuntimeAttributesFailedCreation(runtimeAttributes,
+      s"""Invalid keys in awsBatchEvaluateOnExit runtime attribute: Set(onrandomstatus).
+         | Only Set(action, onExitCode, onReason, onStatusReason) are accepted.""".stripMargin.replace(
+        "\n", ""))
   }
 
   private def assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes: Map[String, WomValue],
@@ -397,7 +445,6 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
                                                            defaultZones: NonEmptyList[String] = defaultZones,
                                                            configuration: AwsBatchConfiguration = configuration): Unit = {
     try {
-
       val actualRuntimeAttributes = toAwsBatchRuntimeAttributes(runtimeAttributes, workflowOptions, configuration)
       assert(actualRuntimeAttributes == expectedRuntimeAttributes)
     } catch {
@@ -409,11 +456,10 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
   private def assertAwsBatchRuntimeAttributesFailedCreation(runtimeAttributes: Map[String, WomValue],
                                                        exMsg: String,
                                                        workflowOptions: WorkflowOptions = emptyWorkflowOptions): Unit = {
-    try {
-      toAwsBatchRuntimeAttributes(runtimeAttributes, workflowOptions, configuration)
-      fail(s"A RuntimeException was expected with message: $exMsg")
-    } catch {
-      case ex: RuntimeException => assert(ex.getMessage.contains(exMsg))
+
+    Try(toAwsBatchRuntimeAttributes(runtimeAttributes, workflowOptions, configuration)) match {
+      case Failure(exception) => assert(exception.getMessage.contains(exMsg))
+      case Success(_) => fail(s"A RuntimeException was expected with message: $exMsg")
     }
     ()
   }

@@ -158,27 +158,8 @@ object AwsBatchRuntimeAttributes {
   }
 
   def awsBatchEvaluateOnExitValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[Map[String, String ]]] = {
-
-    val config = runtimeConfig match {
-      case Some(value) => Try(value.getObjectList(AwsBatchEvaluateOnExitValidation.key)) match {
-        case Failure(_) => None
-        case Success(value) => Some(value.asScala.map {_.unwrapped().asScala.toMap}.toList)
-      }
-      case _ => None
-    }
-
-    val defaultWom: Option[WomValue] = config match {
-      case Some(value) => Some(AwsBatchEvaluateOnExitValidation
-        .coercion collectFirst {
-        case womType if womType.coerceRawValue(value).isSuccess => womType.coerceRawValue(value).get
-      } getOrElse {
-        BadDefaultAttribute(WomString(value.toString))
-      })
-      case None => None
-    }
     AwsBatchEvaluateOnExitValidation
-      .withDefault(defaultWom.getOrElse(awsBatchEvaluateOnExitDefault))
-
+      .withDefault(AwsBatchEvaluateOnExitValidation.fromConfig(runtimeConfig).getOrElse(awsBatchEvaluateOnExitDefault))
   }
 
   private def ulimitsValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[Map[String, String]]] =
@@ -459,8 +440,31 @@ class AwsBatchRetryAttemptsValidation(key: String) extends IntRuntimeAttributesV
 
 object AwsBatchEvaluateOnExitValidation extends RuntimeAttributesValidation[Vector[Map[String, String]]] {
 
+  val requiredKey = "action"
+  private val acceptedKeys = Set(requiredKey, "onExitCode", "onReason", "onStatusReason")
 
-  var acceptedKeys = Set("action", "onExitCode", "onReason", "onStatusReason")
+
+  def fromConfig(runtimeConfig: Option[Config]): Option[WomValue]= {
+    val config = runtimeConfig match {
+      case Some(value) => Try(value.getObjectList(key)) match {
+        case Failure(_) => None
+        case Success(value) => Some(value.asScala.map {
+          _.unwrapped().asScala.toMap
+        }.toList)
+      }
+      case _ => None
+    }
+
+    config match {
+      case Some(value) => Some(AwsBatchEvaluateOnExitValidation
+        .coercion collectFirst {
+        case womType if womType.coerceRawValue(value).isSuccess => womType.coerceRawValue(value).get
+      } getOrElse {
+        BadDefaultAttribute(WomString(value.toString))
+      })
+      case None => None
+    }
+  }
 
   override def coercion: Iterable[WomType] = {
     Set(WomStringType, WomArrayType(WomMapType(WomStringType, WomStringType)))
@@ -486,25 +490,37 @@ object AwsBatchEvaluateOnExitValidation extends RuntimeAttributesValidation[Vect
     sequenced
   }
 
+  private def validateActionKey(dict: Map[WomValue, WomValue]): ErrorOr[Map[String, String]] = {
+    val validCondition = Set("retry", "exit")
+    val convertedMap = dict
+      .map { case (WomString(k), WomString(v)) =>
+        (k, v)
+        // case _ => "!!! ERROR3".invalidNel
+      }
+    if (convertedMap.exists {
+      case (key, value) => key.toLowerCase == requiredKey && validCondition.contains(value.toLowerCase)
+    }) {
+      convertedMap.validNel
+    }
+    else {
+      s"Missing or invalid $requiredKey key/value for runtime attribute: $key. Refer to https://docs.aws.amazon.com/batch/latest/APIReference/API_RetryStrategy.html".invalidNel
+    }
+  }
+
   private def check_keys(
                           dict: Map[WomValue, WomValue]
                         ): ErrorOr[Map[String, String]] = {
-    val map_keys = dict.keySet.map(_.valueString).toSet
+    val map_keys = dict.keySet.map(_.valueString.toLowerCase)
     val unrecognizedKeys =
-      map_keys.diff(acceptedKeys)
-
+      map_keys.diff(acceptedKeys.map(x => x.toLowerCase))
     if (!dict.nonEmpty) {
       Map.empty[String, String].validNel
-    } else if (unrecognizedKeys.nonEmpty) {
-      s"Invalid keys in $key runtime attribute: $unrecognizedKeys. $acceptedKeys $map_keys Refer to https://docs.aws.amazon.com/batch/latest/APIReference/API_RetryStrategy.html'".invalidNel
-    } else {
-      dict
-        .collect { case (WomString(k), WomString(v)) =>
-          (k, v)
-          // case _ => "!!! ERROR3".invalidNel
-        }
-        .toMap
-        .validNel
+    }
+    else if (unrecognizedKeys.nonEmpty) {
+      s"Invalid keys in $key runtime attribute: $unrecognizedKeys. Only $acceptedKeys are accepted. Refer to https://docs.aws.amazon.com/batch/latest/APIReference/API_RetryStrategy.html".invalidNel
+    }
+    else {
+      validateActionKey(dict)
     }
   }
 
