@@ -220,13 +220,14 @@ services {
                 }]
                 region = "us-east-1"
                 topicArn = "<topicARN>"
+                publishStatusOnly = true
             }
         }
     }
 }
 ```
-2. Add `sns:Publish` IAM policy to your Cromwell server IAM role. 
-
+2. By default, all cromwell events will be publish to sns. Set `publishStatusOnly = true` if you only publish events that are `status` updates.
+3. Add `sns:Publish` IAM policy to your Cromwell server IAM role.
 #### AWS EventBridge
 
 1. Create an EventBridge bus, add the following to your `cromwell.conf` file and replace `busName` with the name of the bus you just created:

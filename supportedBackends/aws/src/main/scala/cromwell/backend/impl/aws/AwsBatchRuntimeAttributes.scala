@@ -45,7 +45,10 @@ import wom.format.MemorySize
 import wom.types._
 import wom.values._
 
+import scala.util.{Failure, Success, Try}
 import scala.util.matching.Regex
+import scala.jdk.CollectionConverters._
+
 
 /**
  * Attributes that are provided to the job at runtime
@@ -74,6 +77,7 @@ case class AwsBatchRuntimeAttributes(cpu: Int Refined Positive,
                                      noAddress: Boolean,
                                      scriptS3BucketName: String,
                                      awsBatchRetryAttempts: Int,
+                                     awsBatchEvaluateOnExit: Vector[Map[String, String]],
                                      ulimits: Vector[Map[String, String]],
                                      fileSystem: String= "s3")
 
@@ -84,6 +88,11 @@ object AwsBatchRuntimeAttributes {
   val scriptS3BucketKey = "scriptBucketName"
 
   val awsBatchRetryAttemptsKey = "awsBatchRetryAttempts"
+
+  val awsBatchEvaluateOnExitKey = "awsBatchEvaluateOnExit"
+  // retry on all
+  private val awsBatchEvaluateOnExitDefault = WomArray(WomArrayType(WomMapType(WomStringType,WomStringType)), Vector(WomMap(Map.empty[WomValue, WomValue])))
+
 
   val ZonesKey = "zones"
   private val ZonesDefaultValue = WomString("us-east-1a")
@@ -148,6 +157,11 @@ object AwsBatchRuntimeAttributes {
     .configDefaultWomValue(runtimeConfig).getOrElse(WomInteger(0)))
   }
 
+  def awsBatchEvaluateOnExitValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[Map[String, String ]]] = {
+    AwsBatchEvaluateOnExitValidation
+      .withDefault(AwsBatchEvaluateOnExitValidation.fromConfig(runtimeConfig).getOrElse(awsBatchEvaluateOnExitDefault))
+  }
+
   private def ulimitsValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[Map[String, String]]] =
    UlimitsValidation.withDefault(UlimitsValidation.configDefaultWomValue(runtimeConfig) getOrElse UlimitsDefaultValue)
 
@@ -165,6 +179,7 @@ object AwsBatchRuntimeAttributes {
                         queueArnValidation(runtimeConfig),
                         scriptS3BucketNameValidation(runtimeConfig),
                         awsBatchRetryAttemptsValidation(runtimeConfig),
+                        awsBatchEvaluateOnExitValidation(runtimeConfig),
                         ulimitsValidation(runtimeConfig),
                       )
    def validationsLocalBackend  = StandardValidatedRuntimeAttributesBuilder.default(runtimeConfig).withValidation(
@@ -178,6 +193,7 @@ object AwsBatchRuntimeAttributes {
       dockerValidation,
       queueArnValidation(runtimeConfig),
       awsBatchRetryAttemptsValidation(runtimeConfig),
+     awsBatchEvaluateOnExitValidation(runtimeConfig),
       ulimitsValidation(runtimeConfig)
     )
 
@@ -204,6 +220,7 @@ object AwsBatchRuntimeAttributes {
     }
     val awsBatchRetryAttempts: Int = RuntimeAttributesValidation.extract(awsBatchRetryAttemptsValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
     val ulimits: Vector[Map[String, String]] = RuntimeAttributesValidation.extract(ulimitsValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+    val awsBatchEvaluateOnExit: Vector[Map[String, String]] = RuntimeAttributesValidation.extract(awsBatchEvaluateOnExitValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
 
     new AwsBatchRuntimeAttributes(
       cpu,
@@ -217,6 +234,7 @@ object AwsBatchRuntimeAttributes {
       noAddress,
       scriptS3BucketName,
       awsBatchRetryAttempts,
+      awsBatchEvaluateOnExit,
       ulimits,
       fileSystem
     )
@@ -419,6 +437,115 @@ class AwsBatchRetryAttemptsValidation(key: String) extends IntRuntimeAttributesV
 }
 
 
+
+object AwsBatchEvaluateOnExitValidation extends RuntimeAttributesValidation[Vector[Map[String, String]]] {
+
+  val requiredKey = "action"
+  private val acceptedKeys = Set(requiredKey, "onExitCode", "onReason", "onStatusReason")
+
+
+  def fromConfig(runtimeConfig: Option[Config]): Option[WomValue]= {
+    val config = runtimeConfig match {
+      case Some(value) => Try(value.getObjectList(key)) match {
+        case Failure(_) => None
+        case Success(value) => Some(value.asScala.map {
+          _.unwrapped().asScala.toMap
+        }.toList)
+      }
+      case _ => None
+    }
+
+    config match {
+      case Some(value) => Some(AwsBatchEvaluateOnExitValidation
+        .coercion collectFirst {
+        case womType if womType.coerceRawValue(value).isSuccess => womType.coerceRawValue(value).get
+      } getOrElse {
+        BadDefaultAttribute(WomString(value.toString))
+      })
+      case None => None
+    }
+  }
+
+  override def coercion: Iterable[WomType] = {
+    Set(WomStringType, WomArrayType(WomMapType(WomStringType, WomStringType)))
+  }
+
+  override protected def validateValue: PartialFunction[WomValue, ErrorOr[Vector[Map[String, String]]]] = {
+    case WomArray(womType, value)
+      if womType.memberType == WomMapType(WomStringType, WomStringType) =>
+      check_maps(value.toVector)
+    case WomMap(_, _) => "!!! ERROR1".invalidNel
+  }
+
+  private def check_maps(
+                          maps: Vector[WomValue]
+                        ): ErrorOr[Vector[Map[String, String]]] = {
+    val entryNels: Vector[ErrorOr[Map[String, String]]] = maps.map {
+      case WomMap(_, value) => check_keys(value)
+      case _ => "!!! ERROR2".invalidNel
+    }
+    val sequenced: ErrorOr[Vector[Map[String, String]]] = sequenceNels(
+      entryNels
+    )
+    sequenced
+  }
+
+  private def validateActionKey(dict: Map[WomValue, WomValue]): ErrorOr[Map[String, String]] = {
+    val validCondition = Set("retry", "exit")
+    val convertedMap = dict
+      .map { case (WomString(k), WomString(v)) =>
+        (k, v)
+        // case _ => "!!! ERROR3".invalidNel
+      }
+    if (convertedMap.exists {
+      case (key, value) => key.toLowerCase == requiredKey && validCondition.contains(value.toLowerCase)
+    }) {
+      convertedMap.validNel
+    }
+    else {
+      s"Missing or invalid $requiredKey key/value for runtime attribute: $key. Refer to https://docs.aws.amazon.com/batch/latest/APIReference/API_RetryStrategy.html".invalidNel
+    }
+  }
+
+  private def check_keys(
+                          dict: Map[WomValue, WomValue]
+                        ): ErrorOr[Map[String, String]] = {
+    val map_keys = dict.keySet.map(_.valueString.toLowerCase)
+    val unrecognizedKeys =
+      map_keys.diff(acceptedKeys.map(x => x.toLowerCase))
+    if (!dict.nonEmpty) {
+      Map.empty[String, String].validNel
+    }
+    else if (unrecognizedKeys.nonEmpty) {
+      s"Invalid keys in $key runtime attribute: $unrecognizedKeys. Only $acceptedKeys are accepted. Refer to https://docs.aws.amazon.com/batch/latest/APIReference/API_RetryStrategy.html".invalidNel
+    }
+    else {
+      validateActionKey(dict)
+    }
+  }
+
+  private def sequenceNels(
+                            nels: Vector[ErrorOr[Map[String, String]]]
+                          ): ErrorOr[Vector[Map[String, String]]] = {
+    val emptyNel: ErrorOr[Vector[Map[String, String]]] =
+      Vector.empty[Map[String, String]].validNel
+    val seqNel: ErrorOr[Vector[Map[String, String]]] =
+      nels.foldLeft(emptyNel) { (acc, v) =>
+        (acc, v) mapN { (a, v) => a :+ v }
+      }
+    seqNel
+  }
+
+
+  override protected def missingValueMessage: String = s"Expecting $key runtime attribute to be defined"
+
+  /**
+   * Returns the key of the runtime attribute.
+   *
+   * @return The key of the runtime attribute.
+   */
+  override def key: String = AwsBatchRuntimeAttributes.awsBatchEvaluateOnExitKey
+}
 object UlimitsValidation
     extends RuntimeAttributesValidation[Vector[Map[String, String]]] {
   override def key: String = AwsBatchRuntimeAttributes.UlimitsKey
@@ -458,7 +585,7 @@ object UlimitsValidation
       accepted_keys.diff(map_keys) union map_keys.diff(accepted_keys)
 
     if (!dict.nonEmpty){
-      Map.empty[String, String].validNel  
+      Map.empty[String, String].validNel
     }else if (unrecognizedKeys.nonEmpty) {
       s"Invalid keys in $key runtime attribute. Refer to 'ulimits' section on https://docs.aws.amazon.com/batch/latest/userguide/job_definition_parameters.html#containerProperties".invalidNel
     } else {
