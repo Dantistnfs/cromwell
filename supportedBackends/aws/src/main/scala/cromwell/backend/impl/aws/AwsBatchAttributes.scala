@@ -80,7 +80,8 @@ object AwsBatchAttributes {
     "default-runtime-attributes.scriptBucketName",
     "awsBatchRetryAttempts",
     "awsBatchEvaluateOnExit",
-    "ulimits"
+    "ulimits",
+    "gpuCount"
   )
 
   private val deprecatedAwsBatchKeys: Map[String, String] = Map(
