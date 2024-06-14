@@ -109,6 +109,7 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
   val cpu: Int Refined Positive = 2
   val runtimeAttributes: AwsBatchRuntimeAttributes = new AwsBatchRuntimeAttributes(
       cpu = cpu,
+      gpuCount = 0,
       zones = Vector("us-east-1"),
       memory = MemorySize(2.0, MemoryUnit.GB),
       disks = Seq.empty,
