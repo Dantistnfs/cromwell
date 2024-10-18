@@ -109,7 +109,7 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
   val jobPaths: AwsBatchJobPaths = AwsBatchJobPaths(workflowPaths, jobKey)
   val s3Inputs: Set[AwsBatchInput] = Set(AwsBatchFileInput("foo", "s3://bucket/foo", DefaultPathBuilder.get("foo"), AwsBatchWorkingDisk()))
   val s3Outputs: Set[AwsBatchFileOutput] = Set(AwsBatchFileOutput("baa", "s3://bucket/somewhere/baa", DefaultPathBuilder.get("baa"), AwsBatchWorkingDisk()))
-
+  val logGroupName = "/aws/batch/job"
   val cpu: Int Refined Positive = 2
   val sharedMemorySize: Int Refined Positive = 64
   val runtimeAttributes: AwsBatchRuntimeAttributes = new AwsBatchRuntimeAttributes(
@@ -130,16 +130,15 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
       efsDelocalize = false,
       efsMakeMD5 = false,
       fileSystem = "s3",
-      sharedMemorySize = sharedMemorySize
-  ,
-      logGroupName = "/aws/batch/job",
+      sharedMemorySize = sharedMemorySize,
+      logGroupName = logGroupName,
       additionalTags = Map("tag" -> "value")
   )
 
   val batchJobDefintion = AwsBatchJobDefinitionContext(
     runtimeAttributes = runtimeAttributes,
     commandText = "", dockerRcPath = "", dockerStdoutPath = "", dockerStderrPath = "", jobDescriptor = jobDescriptor
-    , jobPaths = jobPaths, inputs = Set(), outputs = Set(), fsxMntPoint = None, None, None, None
+    , jobPaths = jobPaths, inputs = Set(), outputs = Set(), fsxMntPoint = None, None, None, None, None
 
   )
 
@@ -150,21 +149,21 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
     val job = AwsBatchJob(jobDescriptor, runtimeAttributes, "commandLine", script,
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
-      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None)
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String])
     job
   }
   private def generateBasicJobForLocalFS: AwsBatchJob = {
     val job = AwsBatchJob(jobDescriptor, runtimeAttributes.copy(fileSystem="local"), "commandLine", script,
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
-      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None)
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String])
     job
   }
   private def generateJobWithS3InOut: AwsBatchJob = {
     val job = AwsBatchJob(jobDescriptor, runtimeAttributes, "commandLine", script,
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       s3Inputs, s3Outputs,
-      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None)
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String])
     job
   }
 
