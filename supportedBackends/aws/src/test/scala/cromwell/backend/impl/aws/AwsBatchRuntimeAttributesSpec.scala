@@ -48,8 +48,6 @@ import wom.format.MemorySize
 import wom.types._
 import wom.values._
 
-import scala.util.{Failure, Success, Try}
-
 class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeoutSpec with Matchers {
 
   def workflowOptionsWithDefaultRA(defaults: Map[String, JsValue]): WorkflowOptions =
@@ -77,13 +75,12 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     Vector(Map.empty[String, String]),
     false,
     false,
-    sharedMemorySize = refineMV[Positive](64),
+    sharedMemorySize = MemorySize(0.0625, MemoryUnit.GB),
     "/Cromwell/job/",
-    Map("tag1" -> "value1")
+    Map.empty
   )
 
   val expectedDefaultsLocalFS = new AwsBatchRuntimeAttributes(refineMV[Positive](1), 0, Vector("us-east-1a", "us-east-1b"),
-
     MemorySize(2, MemoryUnit.GB), Vector(AwsBatchWorkingDisk()),
     "ubuntu:latest",
     "arn:aws:batch:us-east-1:111222333444:job-queue/job-queue",
@@ -91,6 +88,14 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     ContinueOnReturnCodeSet(Set(0)),
     false,
     "",
+    1,
+    Vector(Map.empty[String, String]),
+    Vector(Map.empty[String, String]),
+    false,
+    false,
+    sharedMemorySize = MemorySize(0.0625, MemoryUnit.GB),
+    "/Cromwell/job/",
+    Map.empty,
     "local"
   )
 
@@ -524,10 +529,10 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
       val runtimeAttributes = Map(
         "docker" -> WomString("ubuntu:latest"),
         "scriptBucketName" -> WomString("my-stuff"),
-        "sharedMemorySize" -> WomInteger(10)
+        "sharedMemorySize" -> WomString("10 MB")
       )
       assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes, expectedDefaults.copy(
-        sharedMemorySize = refineMV[Positive](10)
+        sharedMemorySize = MemorySize(10, MemoryUnit.MB).to(MemoryUnit.GB)
       ))
     }
 
@@ -596,7 +601,7 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
       val actualRuntimeAttributes = toAwsBatchRuntimeAttributes(runtimeAttributes, workflowOptions, configuration)
       assert(actualRuntimeAttributes == expectedRuntimeAttributes)
     } catch {
-      case ex: RuntimeException => fail(s"Exception was not expected but received: ${ex.getMessage}")
+      case ex: RuntimeException => ex.printStackTrace() ;fail(s"Exception was not expected but received: ${ex.getMessage}")
     }
     ()
   }

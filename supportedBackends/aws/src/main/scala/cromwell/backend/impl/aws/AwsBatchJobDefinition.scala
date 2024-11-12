@@ -34,7 +34,7 @@ package cromwell.backend.impl.aws
 import scala.collection.mutable.ListBuffer
 import cromwell.backend.BackendJobDescriptor
 import cromwell.backend.io.JobPaths
-import software.amazon.awssdk.services.batch.model.{ContainerProperties, EvaluateOnExit, Host, KeyValuePair, LinuxParameters, LogConfiguration, MountPoint, ResourceRequirement, ResourceType, RetryAction, RetryStrategy, Ulimit, Volume}
+import software.amazon.awssdk.services.batch.model.{ContainerProperties, EvaluateOnExit, Host, KeyValuePair, LinuxParameters, LogConfiguration, MountPoint, ResourceRequirement, ResourceType, RetryAction, RetryStrategy, Secret, Ulimit, Volume}
 import cromwell.backend.impl.aws.io.AwsBatchVolume
 
 import scala.jdk.CollectionConverters._
@@ -165,8 +165,11 @@ trait AwsBatchJobDefinitionBuilder {
       efsMakeMD5: Boolean,
       tagResources: Boolean,
       logGroupName: String,
-      sharedMemorySize: MemorySize): String = {
-        s"$imageName:$packedCommand:${volumes.map(_.toString).mkString(",")}:${mountPoints.map(_.toString).mkString(",")}:${env.map(_.toString).mkString(",")}:${ulimits.map(_.toString).mkString(",")}:${efsDelocalize.toString}:${efsMakeMD5.toString}:${tagResources.toString}:$logGroupName:${sharedMemorySize.to(MemoryUnit.MB).amount.toInt}"
+      sharedMemorySize: MemorySize,
+      awsBatchSecrets: Vector[AwsBatchSecrets],
+      awsBatchExecutionRole: String
+     ): String = {
+        s"$imageName:$packedCommand:${volumes.map(_.toString).mkString(",")}:${mountPoints.map(_.toString).mkString(",")}:${env.map(_.toString).mkString(",")}:${ulimits.map(_.toString).mkString(",")}:${efsDelocalize.toString}:${efsMakeMD5.toString}:${tagResources.toString}:$logGroupName:${sharedMemorySize.to(MemoryUnit.MB).amount.toInt}:${awsBatchSecrets.toString}:${awsBatchExecutionRole}"
       }
 
     val environment = List.empty[KeyValuePair]
@@ -202,11 +205,30 @@ trait AwsBatchJobDefinitionBuilder {
       efsMakeMD5,
       tagResources,
       logGroupName,
-      context.runtimeAttributes.sharedMemorySize
+      context.runtimeAttributes.sharedMemorySize,
+      context.runtimeAttributes.awsBatchSecrets,
+      context.runtimeAttributes.awsBatchExecutionRole
     )
     // To reuse job definition for gpu and gpu-runs, we will create a job definition that does not gpu requirements
     // since aws batch does not allow you to set gpu as 0 when you dont need it. you will always need cpu and memory
-    (ContainerProperties.builder()
+    val builder = ContainerProperties.builder()
+
+    val secretLists = context.runtimeAttributes.awsBatchSecrets.map {
+      x => Secret.builder().name(x.name).valueFrom(x.valueFrom).build()
+    }
+    if (secretLists.nonEmpty) {
+      builder.secrets(
+        secretLists: _*
+      )
+    }
+
+    if (context.runtimeAttributes.awsBatchExecutionRole.nonEmpty) {
+      builder.executionRoleArn(
+        context.runtimeAttributes.awsBatchExecutionRole
+      )
+    }
+
+    (builder
       .image(context.runtimeAttributes.dockerImage)
       .command(packedCommand.asJava)
       .resourceRequirements(

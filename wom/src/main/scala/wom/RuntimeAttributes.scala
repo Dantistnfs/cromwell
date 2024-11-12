@@ -22,6 +22,7 @@ object RuntimeAttributesKeys {
   val MemoryMinKey = "memoryMin"
   val MemoryMaxKey = "memoryMax"
   val sharedMemoryKey = "sharedMemorySize"
+  val awsBatchSecretsKey = "awsBatchSecrets"
   val TmpDirMinKey = "tmpDirMin"
   val TmpDirMaxKey = "tmpDirMax"
   val OutDirMinKey = "outDirMin"
