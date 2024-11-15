@@ -34,7 +34,7 @@ package cromwell.backend.impl.aws
 import scala.collection.mutable.ListBuffer
 import cromwell.backend.BackendJobDescriptor
 import cromwell.backend.io.JobPaths
-import software.amazon.awssdk.services.batch.model.{ContainerProperties, EvaluateOnExit, Host, KeyValuePair, LinuxParameters, LogConfiguration, MountPoint, ResourceRequirement, ResourceType, RetryAction, RetryStrategy, Ulimit, Volume}
+import software.amazon.awssdk.services.batch.model.{ContainerProperties, EvaluateOnExit, Host, KeyValuePair, LinuxParameters, LogConfiguration, MountPoint, ResourceRequirement, ResourceType, RetryAction, RetryStrategy, Secret, Ulimit, Volume}
 import cromwell.backend.impl.aws.io.AwsBatchVolume
 
 import scala.jdk.CollectionConverters._
@@ -153,9 +153,27 @@ trait AwsBatchJobDefinitionBuilder {
       ).toList
     }
 
-    def buildName(imageName: String, packedCommand: String, volumes: List[Volume], mountPoints: List[MountPoint], env: Seq[KeyValuePair], ulimits: List[Ulimit], efsDelocalize: Boolean, efsMakeMD5: Boolean, tagResources: Boolean, sharedMemorySize: Int, logGroupName: String): String = {
-      s"$imageName:$packedCommand:${volumes.map(_.toString).mkString(",")}:${mountPoints.map(_.toString).mkString(",")}:${env.map(_.toString).mkString(",")}:${ulimits.map(_.toString).mkString(",")}:${efsDelocalize.toString}:${efsMakeMD5.toString}:${tagResources.toString}:${sharedMemorySize.toString}:$logGroupName"
+    def resolveSecrets(awsBatchSecrets: AwsBatchSecrets) = {
+
     }
+
+    def buildName(
+      imageName: String,
+      packedCommand: String,
+      volumes: List[Volume],
+      mountPoints: List[MountPoint],
+      env: Seq[KeyValuePair],
+      ulimits: List[Ulimit],
+      efsDelocalize: Boolean,
+      efsMakeMD5: Boolean,
+      tagResources: Boolean,
+      logGroupName: String,
+      sharedMemorySize: Int,
+      awsBatchSecrets: Vector[AwsBatchSecrets],
+      awsBatchExecutionRole: String
+     ): String = {
+        s"$imageName:$packedCommand:${volumes.map(_.toString).mkString(",")}:${mountPoints.map(_.toString).mkString(",")}:${env.map(_.toString).mkString(",")}:${ulimits.map(_.toString).mkString(",")}:${efsDelocalize.toString}:${efsMakeMD5.toString}:${tagResources.toString}:$logGroupName:${sharedMemorySize}:${awsBatchSecrets.toString}:${awsBatchExecutionRole}"
+      }
 
     val environment = List.empty[KeyValuePair]
     val cmdName = context.runtimeAttributes.fileSystem match {
@@ -189,13 +207,32 @@ trait AwsBatchJobDefinitionBuilder {
       efsDelocalize,
       efsMakeMD5,
       tagResources,
+      logGroupName,
       context.runtimeAttributes.sharedMemorySize.value,
-      logGroupName
+      context.runtimeAttributes.awsBatchSecrets,
+      context.runtimeAttributes.awsBatchExecutionRole
     )
 
     // To reuse job definition for gpu and gpu-runs, we will create a job definition that does not gpu requirements
     // since aws batch does not allow you to set gpu as 0 when you dont need it. you will always need cpu and memory
-    (ContainerProperties.builder()
+    val builder = ContainerProperties.builder()
+
+    val secretLists = context.runtimeAttributes.awsBatchSecrets.map {
+      x => Secret.builder().name(x.name).valueFrom(x.valueFrom).build()
+    }
+    if (secretLists.nonEmpty) {
+      builder.secrets(
+        secretLists: _*
+      )
+    }
+
+    if (context.runtimeAttributes.awsBatchExecutionRole.nonEmpty) {
+      builder.executionRoleArn(
+        context.runtimeAttributes.awsBatchExecutionRole
+      )
+    }
+
+    (builder
       .image(context.runtimeAttributes.dockerImage)
       .command(packedCommand.asJava)
       .resourceRequirements(

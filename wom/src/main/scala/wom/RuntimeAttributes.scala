@@ -33,6 +33,8 @@ object RuntimeAttributesKeys {
   val FailOnStderrKey = "failOnStderr"
   val ContinueOnReturnCodeKey = "continueOnReturnCode"
   val sharedMemoryKey = "sharedMemorySize"
+  val awsBatchSecretsKey = "awsBatchSecrets"
+
 }
 
 case class RuntimeAttributes(attributes: Map[String, WomExpression])
