@@ -41,6 +41,7 @@ import scala.jdk.CollectionConverters._
 import java.security.MessageDigest
 import org.apache.commons.lang3.builder.{ToStringBuilder, ToStringStyle}
 import org.slf4j.{Logger, LoggerFactory}
+import software.amazon.awssdk.arns.Arn
 import wdl4s.parser.MemoryUnit
 
 
@@ -153,10 +154,6 @@ trait AwsBatchJobDefinitionBuilder {
       ).toList
     }
 
-    def resolveSecrets(awsBatchSecrets: AwsBatchSecrets) = {
-
-    }
-
     def buildName(
       imageName: String,
       packedCommand: String,
@@ -216,9 +213,23 @@ trait AwsBatchJobDefinitionBuilder {
     // To reuse job definition for gpu and gpu-runs, we will create a job definition that does not gpu requirements
     // since aws batch does not allow you to set gpu as 0 when you dont need it. you will always need cpu and memory
     val builder = ContainerProperties.builder()
-
     val secretLists = context.runtimeAttributes.awsBatchSecrets.map {
-      x => Secret.builder().name(x.name).valueFrom(x.valueFrom).build()
+      x => {
+        val secretArn = x.valueFrom.startsWith("arn:aws:secretsmanager") match {
+          case true => x.valueFrom
+          case false => {
+            val queueArn = Arn.fromString(context.runtimeAttributes.queueArn)
+            Arn.builder().region(
+              queueArn.region().get()
+            ).partition(
+                queueArn.partition()
+              ).accountId(
+              queueArn.accountId().get()
+            ).service("secretsmanager").resource(x.valueFrom).build().toString
+          }
+        }
+        Secret.builder().name(x.name).valueFrom(secretArn).build()
+      }
     }
     if (secretLists.nonEmpty) {
       builder.secrets(
