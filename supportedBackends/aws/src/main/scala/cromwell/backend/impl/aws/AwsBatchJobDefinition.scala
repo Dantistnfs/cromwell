@@ -41,7 +41,6 @@ import scala.jdk.CollectionConverters._
 import java.security.MessageDigest
 import org.apache.commons.lang3.builder.{ToStringBuilder, ToStringStyle}
 import org.slf4j.{Logger, LoggerFactory}
-import software.amazon.awssdk.arns.Arn
 import wdl4s.parser.MemoryUnit
 
 
