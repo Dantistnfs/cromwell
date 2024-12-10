@@ -97,8 +97,10 @@ case class AwsBatchRuntimeAttributes(cpu: Int Refined Positive,
                                      sharedMemorySize: Int Refined Positive,
                                      logGroupName: String,
                                      additionalTags: Map[String, String],
-                                     fileSystem: String = "s3",
-                                     tagResources: Boolean = false
+                                     fileSystem: String= "s3",
+                                     tagResources: Boolean = false,
+                                     awsBatchSecrets: Vector[AwsBatchSecrets] = Vector.empty,
+                                     awsBatchExecutionRole: String = ""
                                     )
 
 object AwsBatchRuntimeAttributes {
@@ -110,6 +112,9 @@ object AwsBatchRuntimeAttributes {
   val awsBatchRetryAttemptsKey = "awsBatchRetryAttempts"
 
   val awsBatchEvaluateOnExitKey = "awsBatchEvaluateOnExit"
+
+  val awsBatchExecutionRoleKey = "awsBatchExecutionRole"
+  private val awsBatchExecutionRoleValidationInstance = new StringRuntimeAttributesValidation(awsBatchExecutionRoleKey)
 
   val defaultSharedMemorySize = WomInteger(64)
   private val awsBatchEvaluateOnExitDefault = WomArray(WomArrayType(WomMapType(WomStringType,WomStringType)), Vector(WomMap(Map.empty[WomValue, WomValue])))
@@ -160,17 +165,11 @@ object AwsBatchRuntimeAttributes {
   private def zonesValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[String]] = ZonesValidation
     .withDefault(ZonesValidation.configDefaultWomValue(runtimeConfig) getOrElse ZonesDefaultValue)
 
-  private def memoryValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[MemorySize] = {
+  private def memoryValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[MemorySize] =
     MemoryValidation.withDefaultMemory(
       RuntimeAttributesKeys.MemoryKey,
-      MemoryValidation.configDefaultString(RuntimeAttributesKeys.MemoryKey, runtimeConfig) getOrElse MemoryDefaultValue)
-  }
-
-  private def sharedMemorySizeValidation(runtimeConfig: Option[Config]):  RuntimeAttributesValidation[Refined[Int, Positive]] = {
-    SharedMemorySizeValidation(sharedMemoryKey).withDefault(
-      SharedMemorySizeValidation(sharedMemoryKey).configDefaultWomValue(runtimeConfig).getOrElse(defaultSharedMemorySize)
+      MemoryValidation.configDefaultString(RuntimeAttributesKeys.MemoryKey, runtimeConfig) getOrElse MemoryDefaultValue
     )
-  }
 
   private def memoryMinValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[MemorySize] = {
     MemoryValidation.withDefaultMemory(
@@ -180,6 +179,12 @@ object AwsBatchRuntimeAttributes {
 
   private def noAddressValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Boolean] = noAddressValidationInstance
     .withDefault(noAddressValidationInstance.configDefaultWomValue(runtimeConfig) getOrElse NoAddressDefaultValue)
+
+  private def sharedMemorySizeValidation(runtimeConfig: Option[Config]):  RuntimeAttributesValidation[Refined[Int, Positive]] = {
+    SharedMemorySizeValidation(sharedMemoryKey).withDefault(
+      SharedMemorySizeValidation(sharedMemoryKey).configDefaultWomValue(runtimeConfig).getOrElse(defaultSharedMemorySize)
+    )
+  }
 
   private def logGroupNameValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] = logGroupNameValidationInstance
     .withDefault(logGroupNameValidationInstance.configDefaultWomValue(runtimeConfig) getOrElse LogGroupNameDefaultValue)
@@ -223,6 +228,13 @@ object AwsBatchRuntimeAttributes {
   private def ulimitsValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[Map[String, String]]] =
    UlimitsValidation.withDefault(UlimitsValidation.configDefaultWomValue(runtimeConfig) getOrElse UlimitsDefaultValue)
 
+  private def awsBatchSecretsValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Vector[AwsBatchSecrets]] =
+    AwsBatchSecretsValidation.withDefault(AwsBatchSecretsValidation.fromConfig(runtimeConfig) getOrElse WomArray.empty)
+
+  private def awsExecutionRoleValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] = awsBatchExecutionRoleValidationInstance.withDefault(
+    awsBatchExecutionRoleValidationInstance.configDefaultWomValue(runtimeConfig) getOrElse WomString("")
+  )
+
 
   // routine that aggregates disks from default-runtime-attributes and efs.
   def aggregateDisksInRuntimeConfig(configuration: AwsBatchConfiguration): Option[Config] = {
@@ -251,27 +263,29 @@ object AwsBatchRuntimeAttributes {
   def runtimeAttributesBuilder(configuration: AwsBatchConfiguration): StandardValidatedRuntimeAttributesBuilder = {
     val runtimeConfig = aggregateDisksInRuntimeConfig(configuration)
     def validationsS3backend = StandardValidatedRuntimeAttributesBuilder.default(runtimeConfig).withValidation(
-                        cpuValidation(runtimeConfig),
-                        cpuMinValidation(runtimeConfig),
-                        gpuCountValidation(runtimeConfig),
-                        disksValidation(runtimeConfig),
-                        zonesValidation(runtimeConfig),
-                        memoryValidation(runtimeConfig),
-                        memoryMinValidation(runtimeConfig),
-                        noAddressValidation(runtimeConfig),
-                        dockerValidation,
-                        queueArnValidation(runtimeConfig),
-                        scriptS3BucketNameValidation(runtimeConfig),
-                        logGroupNameValidation(runtimeConfig),
-                        awsBatchRetryAttemptsValidation(runtimeConfig),
-                        awsBatchEvaluateOnExitValidation(runtimeConfig),
-                        ulimitsValidation(runtimeConfig),
-                        awsBatchefsDelocalizeValidation(runtimeConfig),
-                        awsBatchefsMakeMD5Validation(runtimeConfig),
-                        awsBatchtagResourcesValidation(runtimeConfig),
-                        sharedMemorySizeValidation(runtimeConfig),
-                      )
-   def validationsLocalBackend  = StandardValidatedRuntimeAttributesBuilder.default(runtimeConfig).withValidation(
+      cpuValidation(runtimeConfig),
+      cpuMinValidation(runtimeConfig),
+      gpuCountValidation(runtimeConfig),
+      disksValidation(runtimeConfig),
+      zonesValidation(runtimeConfig),
+      memoryValidation(runtimeConfig),
+      memoryMinValidation(runtimeConfig),
+      noAddressValidation(runtimeConfig),
+      dockerValidation,
+      queueArnValidation(runtimeConfig),
+      scriptS3BucketNameValidation(runtimeConfig),
+      logGroupNameValidation(runtimeConfig),
+      awsBatchRetryAttemptsValidation(runtimeConfig),
+      awsBatchEvaluateOnExitValidation(runtimeConfig),
+      ulimitsValidation(runtimeConfig),
+      awsBatchefsDelocalizeValidation(runtimeConfig),
+      awsBatchefsMakeMD5Validation(runtimeConfig),
+      awsBatchtagResourcesValidation(runtimeConfig),
+      sharedMemorySizeValidation(runtimeConfig),
+      awsBatchSecretsValidation(runtimeConfig),
+      awsExecutionRoleValidation(runtimeConfig)
+    )
+    def validationsLocalBackend  = StandardValidatedRuntimeAttributesBuilder.default(runtimeConfig).withValidation(
       cpuValidation(runtimeConfig),
       cpuMinValidation(runtimeConfig),
       gpuCountValidation(runtimeConfig),
@@ -290,6 +304,8 @@ object AwsBatchRuntimeAttributes {
       awsBatchefsMakeMD5Validation(runtimeConfig),
       awsBatchtagResourcesValidation(runtimeConfig),
       sharedMemorySizeValidation(runtimeConfig),
+      awsBatchSecretsValidation(runtimeConfig),
+      awsExecutionRoleValidation(runtimeConfig)
    )
 
     configuration.fileSystem match  {
@@ -329,7 +345,10 @@ object AwsBatchRuntimeAttributes {
     val efsDelocalize: Boolean = RuntimeAttributesValidation.extract(awsBatchefsDelocalizeValidation(runtimeAttrsConfig),validatedRuntimeAttributes)
     val efsMakeMD5: Boolean = RuntimeAttributesValidation.extract(awsBatchefsMakeMD5Validation(runtimeAttrsConfig),validatedRuntimeAttributes)
     val tagResources: Boolean = RuntimeAttributesValidation.extract(awsBatchtagResourcesValidation(runtimeAttrsConfig),validatedRuntimeAttributes)
-    val sharedMemorySize: Int Refined Positive = RuntimeAttributesValidation.extract(sharedMemorySizeValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+    val sharedMemorySize: Int Refined Positive  = RuntimeAttributesValidation.extract(sharedMemorySizeValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+    val awsBatchSecrets: Vector[AwsBatchSecrets] = RuntimeAttributesValidation.extract(awsBatchSecretsValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+    val awsExecutionRole: String = RuntimeAttributesValidation.extract(awsExecutionRoleValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+
     new AwsBatchRuntimeAttributes(
       cpu,
       gpuCount,
@@ -352,6 +371,8 @@ object AwsBatchRuntimeAttributes {
       additionalTags,
       fileSystem,
       tagResources,
+      awsBatchSecrets,
+      awsExecutionRole
     )
   }
 }
