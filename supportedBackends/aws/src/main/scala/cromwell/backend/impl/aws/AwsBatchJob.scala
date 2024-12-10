@@ -601,6 +601,15 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
         .tags(runtimeAttributes.additionalTags.asJava)
         .jobQueue(runtimeAttributes.queueArn)
         .jobDefinition(definitionArn)
+
+      if (runtimeAttributes.preemptible > 0) {
+        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
+      }
+
+      if (runtimeAttributes.gpuCount >= 1) {
+        submitJobRequest.jobQueue(runtimeAttributes.gpuQueueArn)
+      }
+
       // tagging activated : add to request
       if (tagResources.getOrElse(false)) {
           // replace invalid characters in the tags

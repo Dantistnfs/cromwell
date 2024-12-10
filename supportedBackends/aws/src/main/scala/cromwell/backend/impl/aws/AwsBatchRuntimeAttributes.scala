@@ -100,12 +100,20 @@ case class AwsBatchRuntimeAttributes(cpu: Int Refined Positive,
                                      fileSystem: String= "s3",
                                      tagResources: Boolean = false,
                                      awsBatchSecrets: Vector[AwsBatchSecrets] = Vector.empty,
-                                     awsBatchExecutionRole: String = ""
+                                     awsBatchExecutionRole: String = "",
+                                     gpuQueueArn: String = "",
+                                     preemptible: Int = 0,
+                                     preemptibleQueneArn: String = ""
+
                                     )
 
 object AwsBatchRuntimeAttributes {
   val Log: Logger = LoggerFactory.getLogger(this.getClass)
   val QueueArnKey = "queueArn"
+  val preemptibleKey = "preemptible"
+  private val preemptibleValidationInstance =   new IntRuntimeAttributesValidation(preemptibleKey)
+  val preemptibleQueneArnKey = "preemptibleQueueArn"
+  val gpuQueueArnKey = "gpuQueueArn"
 
   val scriptS3BucketKey = "scriptBucketName"
 
@@ -200,6 +208,18 @@ object AwsBatchRuntimeAttributes {
     QueueArnValidation.withDefault(QueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
       (throw new RuntimeException("queueArn is required")))
 
+
+  private def gpuQueueArnValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] =
+    GpuQueueArnValidation.withDefault(GpuQueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
+      QueueArnValidation.configDefaultWomValue(runtimeConfig).get)
+
+  private def preemptibleQueueArnValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] =
+    PreemptibleQueueArnValidation.withDefault(PreemptibleQueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
+      QueueArnValidation.configDefaultWomValue(runtimeConfig).get)
+
+  private def preemptibleValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Int] = preemptibleValidationInstance
+    .withDefault(preemptibleValidationInstance.configDefaultWomValue(runtimeConfig) getOrElse WomInteger(0))
+
   private def awsBatchRetryAttemptsValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Int] = {
     AwsBatchRetryAttemptsValidation(awsBatchRetryAttemptsKey).withDefault(AwsBatchRetryAttemptsValidation(awsBatchRetryAttemptsKey)
     .configDefaultWomValue(runtimeConfig).getOrElse(WomInteger(0)))
@@ -283,7 +303,10 @@ object AwsBatchRuntimeAttributes {
       awsBatchtagResourcesValidation(runtimeConfig),
       sharedMemorySizeValidation(runtimeConfig),
       awsBatchSecretsValidation(runtimeConfig),
-      awsExecutionRoleValidation(runtimeConfig)
+      awsExecutionRoleValidation(runtimeConfig),
+      gpuQueueArnValidation(runtimeConfig),
+      preemptibleValidation(runtimeConfig),
+      preemptibleQueueArnValidation(runtimeConfig)
     )
     def validationsLocalBackend  = StandardValidatedRuntimeAttributesBuilder.default(runtimeConfig).withValidation(
       cpuValidation(runtimeConfig),
@@ -305,7 +328,10 @@ object AwsBatchRuntimeAttributes {
       awsBatchtagResourcesValidation(runtimeConfig),
       sharedMemorySizeValidation(runtimeConfig),
       awsBatchSecretsValidation(runtimeConfig),
-      awsExecutionRoleValidation(runtimeConfig)
+      awsExecutionRoleValidation(runtimeConfig),
+      gpuQueueArnValidation(runtimeConfig),
+      preemptibleValidation(runtimeConfig),
+      preemptibleQueueArnValidation(runtimeConfig)
    )
 
     configuration.fileSystem match  {
@@ -348,7 +374,10 @@ object AwsBatchRuntimeAttributes {
     val sharedMemorySize: Int Refined Positive  = RuntimeAttributesValidation.extract(sharedMemorySizeValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
     val awsBatchSecrets: Vector[AwsBatchSecrets] = RuntimeAttributesValidation.extract(awsBatchSecretsValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
     val awsExecutionRole: String = RuntimeAttributesValidation.extract(awsExecutionRoleValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
-
+    val preemptible: Int = RuntimeAttributesValidation.extract(preemptibleValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+    val gpuQueue: String = RuntimeAttributesValidation.extract(gpuQueueArnValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+    val preemptibleQueue: String = RuntimeAttributesValidation.extract(preemptibleQueueArnValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+    
     new AwsBatchRuntimeAttributes(
       cpu,
       gpuCount,
@@ -372,7 +401,10 @@ object AwsBatchRuntimeAttributes {
       fileSystem,
       tagResources,
       awsBatchSecrets,
-      awsExecutionRole
+      awsExecutionRole,
+      gpuQueue,
+      preemptible,
+      preemptibleQueue
     )
   }
 }
@@ -400,12 +432,9 @@ class ScriptS3BucketNameValidation( key: String ) extends StringRuntimeAttribute
   }
 }
 
-object QueueArnValidation extends ArnValidation(AwsBatchRuntimeAttributes.QueueArnKey) {
-  // queue arn format can be found here
-  // https://docs.aws.amazon.com/en_us/general/latest/gr/aws-arns-and-namespaces.html#arn-syntax-batch
-  // arn:aws:batch:region:account-id:job-queue/queue-name
+class BatchQueueArnValidation(override val key: String) extends ArnValidation(key) {
   override protected val arnRegex: Regex =
-  s"""
+    s"""
       (?x)                            # Turn on comments and whitespace insensitivity
       (arn)                           # Every AWS ARN starts with "arn"
       :
@@ -431,6 +460,10 @@ object QueueArnValidation extends ArnValidation(AwsBatchRuntimeAttributes.QueueA
       )                               # End capturing ARN for "resourcetype/resource"
     """.trim.r
 }
+
+object QueueArnValidation extends BatchQueueArnValidation(AwsBatchRuntimeAttributes.QueueArnKey)
+object GpuQueueArnValidation extends BatchQueueArnValidation(AwsBatchRuntimeAttributes.gpuQueueArnKey)
+object PreemptibleQueueArnValidation extends BatchQueueArnValidation(AwsBatchRuntimeAttributes.preemptibleQueneArnKey)
 
 object ArnValidation {
   def apply(key: String): ArnValidation = new ArnValidation(key)
