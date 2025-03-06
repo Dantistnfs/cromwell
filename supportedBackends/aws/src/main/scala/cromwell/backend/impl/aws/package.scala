@@ -4,10 +4,14 @@ import cats.data.ReaderT
 import com.google.common.io.BaseEncoding
 import cromwell.cloudsupport.aws.auth.AwsAuthMode
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.batch.model.KeyValuePair
+import software.amazon.awssdk.retries.StandardRetryStrategy
+import software.amazon.awssdk.retries.api.BackoffStrategy
 
 import java.io.ByteArrayOutputStream
+import java.time.Duration
 import java.util.zip.GZIPOutputStream
 
 package object aws {
@@ -73,6 +77,16 @@ package object aws {
     awsAuthMode.foreach { awsAuthMode =>
       builder.credentialsProvider(awsAuthMode.provider())
     }
+
+    val backoffStrategy = BackoffStrategy.exponentialDelay(
+      Duration.ofMillis(300), Duration.ofSeconds(30)
+    )
+
+    val retryStrategy = StandardRetryStrategy.builder().backoffStrategy(backoffStrategy).maxAttempts(30).build()
+
+    val configurationOverride = ClientOverrideConfiguration
+      .builder().retryStrategy(retryStrategy).build()
+    builder.overrideConfiguration(configurationOverride)
     configRegion.foreach(builder.region)
     builder.build
   }
