@@ -610,19 +610,20 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
         submitJobRequest.jobQueue(runtimeAttributes.gpuQueueArn)
       }
 
-      // tagging activated : add to request
-      if (tagResources.getOrElse(false)) {
-          // replace invalid characters in the tags
-          val invalidCharsPattern = "[^a-zA-Z0-9_.:/=+-@]+".r
-          val tags: Map[String,String] = Map(
-            "cromwell-workflow-name" -> invalidCharsPattern.replaceAllIn(workflowName,"_"),
-            "cromwell-workflow-id" -> invalidCharsPattern.replaceAllIn(workflowId,"_"),
-            "cromwell-task-id" -> invalidCharsPattern.replaceAllIn(taskId,"_"),
-            "cromwell-root-workflow-name" -> invalidCharsPattern.replaceAllIn(jobDescriptor.workflowDescriptor.rootWorkflow.name.toString,"_"),
-            "cromwell-root-workflow-id" -> invalidCharsPattern.replaceAllIn(jobDescriptor.workflowDescriptor.rootWorkflowId.toString,"_")
-            )
-          submitJobRequest = submitJobRequest.tags(tags.asJava).propagateTags(true)
-      }
+      val invalidCharsPattern = "[^a-zA-Z0-9_.:/=+-@]+".r
+
+      val tags: Map[String,String] = Map(
+        "source" -> invalidCharsPattern.replaceAllIn(jobDescriptor.workflowDescriptor.rootWorkflowId.toString,"_"),
+        "context" ->  invalidCharsPattern.replaceAllIn(workflowId,"_"),
+        "resource" -> invalidCharsPattern.replaceAllIn(taskId,"_"),
+        "cromwell-workflow-name" -> invalidCharsPattern.replaceAllIn(workflowName,"_"),
+        "cromwell-workflow-id" -> invalidCharsPattern.replaceAllIn(workflowId,"_"),
+        "cromwell-task-id" -> invalidCharsPattern.replaceAllIn(taskId,"_"),
+        "cromwell-root-workflow-name" -> invalidCharsPattern.replaceAllIn(jobDescriptor.workflowDescriptor.rootWorkflow.name.toString,"_"),
+        "cromwell-root-workflow-id" -> invalidCharsPattern.replaceAllIn(jobDescriptor.workflowDescriptor.rootWorkflowId.toString,"_")
+      )
+      submitJobRequest = submitJobRequest.tags(tags.asJava).propagateTags(true)
+
       // submit
       val submit: F[SubmitJobResponse] =
         async.delay(batchClient.submitJob(
