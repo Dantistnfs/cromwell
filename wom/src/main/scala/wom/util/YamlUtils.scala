@@ -79,6 +79,7 @@ object YamlUtils {
   loaderOptions.setAllowRecursiveKeys(true)
   loaderOptions.setNestingDepthLimit(1000)
   loaderOptions.setMaxAliasesForCollections(Integer.MAX_VALUE)
+  loaderOptions.setCodePointLimit(1024 * 1024 * 1024 * 5) // 5 GB
 
   /** Extends SnakeYaml's Composer checking for a maximum depth before a StackOverflowError occurs. */
   private class MaxDepthComposer(yaml: String, maxDepth: Int Refined NonNegative)
