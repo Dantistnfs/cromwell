@@ -178,7 +178,9 @@ object PartialWorkflowSources {
       YamlUtils.parse(data) match {
         // If it's an array, treat each element as an individual input object, otherwise simply toString the whole thing
         case Right(json) => json.asArray.map(_.traverse(interpretElementFunction)).getOrElse(interpretElementFunction(json).map(Vector(_))).validNel
-        case Left(error) => s"Input file is not a valid yaml or json. Inputs data: '$data'. Error: ${ExceptionUtils.getMessage(error)}.".invalidNel
+        case Left(error) =>
+          log.error(error.getMessage())
+          s"Input file is not a valid yaml or json.  Inputs data: '$data'. Error: ${ExceptionUtils.getMessage(error)}.".invalidNel
       }
     }
 
