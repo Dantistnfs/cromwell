@@ -4,15 +4,10 @@ import cats.data.ReaderT
 import com.google.common.io.BaseEncoding
 import cromwell.cloudsupport.aws.auth.AwsAuthMode
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
-import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
-import software.amazon.awssdk.core.retry.RetryMode
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.batch.model.KeyValuePair
-import software.amazon.awssdk.retries.StandardRetryStrategy
-import software.amazon.awssdk.retries.api.BackoffStrategy
 
 import java.io.ByteArrayOutputStream
-import java.time.Duration
 import java.util.zip.GZIPOutputStream
 
 package object aws {
