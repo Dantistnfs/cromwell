@@ -352,7 +352,6 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
          |  fi
          |}
          |
-         |{
          |set -e
          |# tag instance and volumes to ensure tags are present in case of failure:
          |if [[ "${doTagging}" == "true" ]]; then
@@ -373,7 +372,6 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
          |  echo '*** COMPLETED LOCALIZATION ***'
          |fi
          |set +e
-         |}
          |""".stripMargin
     
     // the paths of the stdOut and stdErr

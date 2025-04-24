@@ -22,7 +22,7 @@ object Dependencies {
   private val circeGenericExtrasV = "0.14.1"
   private val circeOpticsV = "0.14.1"
   private val circeV = "0.14.1"
-  private val circeYamlV = "0.14.1"
+  private val circeYamlV = "0.15.0"
   private val commonsCodecV = "1.15" // via: https://commons.apache.org/proper/commons-codec/
   private val commonsCsvV = "1.9.0"
   private val commonsIoV = "2.11.0" // via: https://commons.apache.org/proper/commons-io/
@@ -122,7 +122,7 @@ object Dependencies {
     * https://github.com/slick/slick/pull/2201
   */
   private val slickV = "3.4.0-M1"
-  private val snakeyamlV = "1.33"
+  private val snakeyamlV = "2.0"
   private val sprayJsonV = "1.3.6"
   private val sttpV = "1.7.2"
   private val swaggerParserV = "1.0.56"

@@ -48,7 +48,7 @@ object YamlUtils {
       // Since we don't actually need the values, wrap the Map in a Set
       val identitySet = java.util.Collections.newSetFromMap(identityHashMap)
       searchForOversizedYaml(parsed, identitySet, maxNodes, new Counter)
-      io.circe.yaml.parser.parse(yaml)
+      io.circe.yaml.Parser(codePointLimit=1024 * 1024 * 1024 * 5).parse(yaml)
     } catch {
       case exception: Exception =>
         Left(ParsingFailure(exception.getMessage, exception))
@@ -79,6 +79,7 @@ object YamlUtils {
   loaderOptions.setAllowRecursiveKeys(true)
   loaderOptions.setNestingDepthLimit(1000)
   loaderOptions.setMaxAliasesForCollections(Integer.MAX_VALUE)
+  loaderOptions.setCodePointLimit(1024 * 1024 * 1024 * 5) // 5 GB
 
   /** Extends SnakeYaml's Composer checking for a maximum depth before a StackOverflowError occurs. */
   private class MaxDepthComposer(yaml: String, maxDepth: Int Refined NonNegative)
