@@ -1189,7 +1189,7 @@ trait StandardAsyncExecutionActor
       case handle: PendingExecutionHandle[
         StandardAsyncJob@unchecked, StandardAsyncRunInfo@unchecked, StandardAsyncRunState@unchecked] =>
 
-        jobLogger.debug(s"$tag Polling Job ${handle.pendingJob}")
+        jobLogger.info(s"$tag Polling Job ${handle.pendingJob}")
         pollStatusAsync(handle) flatMap {
           backendRunStatus =>
             self ! WarnAboutSlownessIfNecessary

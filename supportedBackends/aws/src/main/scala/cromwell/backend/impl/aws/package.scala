@@ -79,9 +79,9 @@ package object aws {
     }
 
     val backoffStrategy = BackoffStrategy.exponentialDelay(
-      Duration.ofMillis(300), Duration.ofSeconds(30)
+      Duration.ofMillis(300), Duration.ofSeconds(120)
     )
-    val retryStrategy = StandardRetryStrategy.builder().backoffStrategy(backoffStrategy).throttlingBackoffStrategy(backoffStrategy).maxAttempts(30).build()
+    val retryStrategy = StandardRetryStrategy.builder().backoffStrategy(backoffStrategy).throttlingBackoffStrategy(backoffStrategy).maxAttempts(60).build()
 
     val configurationOverride = ClientOverrideConfiguration
       .builder().retryStrategy(retryStrategy).build()
