@@ -4,10 +4,14 @@ import cats.data.ReaderT
 import com.google.common.io.BaseEncoding
 import cromwell.cloudsupport.aws.auth.AwsAuthMode
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
+import software.amazon.awssdk.core.retry.RetryPolicy
+import software.amazon.awssdk.core.retry.backoff.BackoffStrategy
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.batch.model.KeyValuePair
 
 import java.io.ByteArrayOutputStream
+import java.time.Duration
 import java.util.zip.GZIPOutputStream
 
 package object aws {
@@ -68,12 +72,26 @@ package object aws {
     * @return a configured client for the AWS service
     */
   def configureClient[BuilderT <: AwsClientBuilder[BuilderT, ClientT], ClientT](builder: AwsClientBuilder[BuilderT, ClientT],
-                                                                                 awsAuthMode: Option[AwsAuthMode],
-                                                                                 configRegion: Option[Region]): ClientT = {
+                                                                               awsAuthMode: Option[AwsAuthMode],
+                                                                               configRegion: Option[Region]): ClientT = {
     awsAuthMode.foreach { awsAuthMode =>
       builder.credentialsProvider(awsAuthMode.provider())
     }
     configRegion.foreach(builder.region)
+
+    // Configure aggressive retry with jitter for 429 responses
+    val retryPolicy = RetryPolicy.builder()
+      .numRetries(10) // Aggressive retry count
+      .backoffStrategy(BackoffStrategy.fullJitterBackoff(Duration.ofMillis(500), Duration.ofSeconds(10)))
+      .throttlingRetryCondition() // Specifically handle throttling (429) responses
+      .build()
+
+    val overrideConfig = ClientOverrideConfiguration.builder()
+      .retryPolicy(retryPolicy)
+      .build()
+
+    builder.overrideConfiguration(overrideConfig)
+
     builder.build
   }
 }

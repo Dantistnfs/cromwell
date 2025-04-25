@@ -1188,7 +1188,6 @@ trait StandardAsyncExecutionActor
     previous match {
       case handle: PendingExecutionHandle[
         StandardAsyncJob@unchecked, StandardAsyncRunInfo@unchecked, StandardAsyncRunState@unchecked] =>
-
         jobLogger.info(s"$tag Polling Job ${handle.pendingJob}")
         pollStatusAsync(handle) flatMap {
           backendRunStatus =>
