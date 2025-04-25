@@ -5,15 +5,11 @@ import com.google.common.io.BaseEncoding
 import cromwell.cloudsupport.aws.auth.AwsAuthMode
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
-import software.amazon.awssdk.core.retry.RetryPolicy
-import software.amazon.awssdk.core.retry.backoff.BackoffStrategy
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.batch.model.KeyValuePair
-import software.amazon.awssdk.core.retry.conditions.OrRetryCondition
-import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition
-import software.amazon.awssdk.core.retry.conditions.RetryCondition
 
 import java.io.ByteArrayOutputStream
+import java.time.Duration
 import java.util.zip.GZIPOutputStream
 
 package object aws {
@@ -46,8 +42,7 @@ package object aws {
     // gzip+base64 can be larger on very small inputs than the input data
     // itself, so we don't want it super-small either. The proxy container
     // is designed to handle either of these variables.
-    val lim = 512 // This is completely arbitrary and I think 512 may even be
-    // too big when looking at the value manually in the console
+    val lim = 512
     data.length() match {
       case len if len <= lim => buildKVPair(prefix, data)
       case _ => buildKVPair(prefix + "_GZ", gzip(data))
@@ -81,19 +76,16 @@ package object aws {
     }
     configRegion.foreach(builder.region)
 
-    // Create custom retry policy that properly handles 429 Too Many Requests and other retryable conditions
-    val tooManyRequestsCondition = RetryOnStatusCodeCondition.create(429) // HTTP 429 Too Many Requests
-    val defaultCondition = RetryCondition.defaultRetryCondition()
-    val combinedRetryCondition = OrRetryCondition.create(tooManyRequestsCondition, defaultCondition)
-
-    val retryPolicy = RetryPolicy.builder()
-      .numRetries(30) // Aggressive retry count
-      .backoffStrategy(BackoffStrategy.defaultStrategy()) // Using the default AWS SDK retry strategy with exponential backoff
-      .retryCondition(combinedRetryCondition)
-      .build()
-
+    // Configure client with timeout settings that align with our retry policy
+    // of 15 maximum retries with exponential backoff up to 60 seconds
     val overrideConfig = ClientOverrideConfiguration.builder()
-      .retryPolicy(retryPolicy)
+      // Total timeout for a complete API call including all retries
+      // 15 retries with a maximum of 60s delay each, plus some buffer
+      .apiCallTimeout(Duration.ofMinutes(20))  
+      // Timeout for an individual attempt before retrying
+      .apiCallAttemptTimeout(Duration.ofSeconds(60))
+      // Add our custom interceptor to handle 429 retries with jittering
+      .addExecutionInterceptor(new RateLimitRetryInterceptor())
       .build()
 
     builder.overrideConfiguration(overrideConfig)

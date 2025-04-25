@@ -51,7 +51,6 @@ import software.amazon.awssdk.services.batch.BatchClient
 import software.amazon.awssdk.services.batch.model._
 import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient
 import software.amazon.awssdk.services.cloudwatchlogs.model.{GetLogEventsRequest, OutputLogEvent}
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.{GetObjectRequest, HeadObjectRequest, NoSuchKeyException, PutObjectRequest}
 import wdl4s.parser.MemoryUnit
@@ -105,11 +104,6 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
   }
   lazy val cloudWatchLogsClient: CloudWatchLogsClient = {
     val builder = CloudWatchLogsClient.builder()
-    configureClient(builder, optAwsAuthMode, configRegion)
-  }
-
-  lazy val dynamoDbClient: DynamoDbClient = {
-    val builder = DynamoDbClient.builder()
     configureClient(builder, optAwsAuthMode, configRegion)
   }
 
