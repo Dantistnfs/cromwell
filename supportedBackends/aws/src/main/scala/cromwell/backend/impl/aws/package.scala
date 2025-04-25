@@ -9,9 +9,11 @@ import software.amazon.awssdk.core.retry.RetryPolicy
 import software.amazon.awssdk.core.retry.backoff.BackoffStrategy
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.batch.model.KeyValuePair
+import software.amazon.awssdk.core.retry.conditions.OrRetryCondition
+import software.amazon.awssdk.core.retry.conditions.RetryOnStatusCodeCondition
+import software.amazon.awssdk.core.retry.conditions.RetryCondition
 
 import java.io.ByteArrayOutputStream
-import java.time.Duration
 import java.util.zip.GZIPOutputStream
 
 package object aws {
@@ -79,11 +81,15 @@ package object aws {
     }
     configRegion.foreach(builder.region)
 
-    // Configure aggressive retry with jitter for 429 responses
+    // Create custom retry policy that properly handles 429 Too Many Requests and other retryable conditions
+    val tooManyRequestsCondition = RetryOnStatusCodeCondition.create(429) // HTTP 429 Too Many Requests
+    val defaultCondition = RetryCondition.defaultRetryCondition()
+    val combinedRetryCondition = OrRetryCondition.create(tooManyRequestsCondition, defaultCondition)
+
     val retryPolicy = RetryPolicy.builder()
-      .numRetries(10) // Aggressive retry count
-      .backoffStrategy(BackoffStrategy.fullJitterBackoff(Duration.ofMillis(500), Duration.ofSeconds(10)))
-      .throttlingRetryCondition() // Specifically handle throttling (429) responses
+      .numRetries(30) // Aggressive retry count
+      .backoffStrategy(BackoffStrategy.defaultStrategy()) // Using the default AWS SDK retry strategy with exponential backoff
+      .retryCondition(combinedRetryCondition)
       .build()
 
     val overrideConfig = ClientOverrideConfiguration.builder()
