@@ -818,7 +818,7 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
       
       if (item.isEmpty) {
         // If the job is not found in the tracker table, return Initializing status
-        Log.debug(s"Job $jobId not found in the tracking table $tableName, returning Initializing status")
+        Log.warn(s"Job $jobId not found in the tracking table $tableName, returning Initializing status")
         return Try(RunStatus.Initializing)
       }
       
@@ -827,9 +827,8 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
         throw new RuntimeException(s"Status attribute not found for job $jobId in table $tableName")
       }
       
-      Log.debug(s"Retrieved status $statusString for job $jobId from DynamoDB table $tableName")
-      
-      Try(RunStatus.fromJobStatus(statusString, jobId).getOrElse {
+      Log.info(s"Retrieved status $statusString for job $jobId from DynamoDB table $tableName")
+      Try(RunStatus.fromJobStatus(JobStatus.fromValue(statusString), jobId).getOrElse {
         throw new RuntimeException(s"Could not convert status $statusString to RunStatus for job $jobId")
       })
     } catch {
