@@ -369,6 +369,7 @@ object Dependencies {
     "ecrpublic",
     "secretsmanager",
     "sns",
+    "dynamodb",
     "eventbridge",
   ).map(artifactName => "software.amazon.awssdk" % artifactName % awsSdkV)
 

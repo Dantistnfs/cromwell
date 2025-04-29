@@ -53,6 +53,8 @@ import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient
 import software.amazon.awssdk.services.cloudwatchlogs.model.{GetLogEventsRequest, OutputLogEvent}
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.{GetObjectRequest, HeadObjectRequest, NoSuchKeyException, PutObjectRequest}
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.dynamodb.model.{GetItemRequest, AttributeValue}
 import wdl4s.parser.MemoryUnit
 
 import scala.jdk.CollectionConverters._
@@ -109,6 +111,11 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
 
   lazy val s3Client: S3Client = {
     val builder = S3Client.builder()
+    configureClient(builder, optAwsAuthMode, configRegion)
+  }
+
+  lazy val dynamoDbClient: DynamoDbClient = {
+    val builder = DynamoDbClient.builder()
     configureClient(builder, optAwsAuthMode, configRegion)
   }
 
@@ -799,10 +806,43 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
     *  @return Current RunStatus
     *
     */
-  def status(jobId: String): Try[RunStatus] = for {
-    statusString <- Try(detail(jobId).status)
-    runStatus <- RunStatus.fromJobStatus(statusString, jobId)
-  } yield runStatus
+  def status(jobId: String): Try[RunStatus] = {
+    // Try to get job status from DynamoDB table first
+    val tableName = "cromwell-batch-job-tracker"
+    val keyName = "jobId"
+    
+    try {
+      val item = getDynamoDbItem(tableName, keyName, jobId)
+      
+      if (item.isEmpty) {
+        // If the job is not found in the tracker table, return Initializing status
+        Log.warn(s"Job $jobId not found in the tracking table $tableName, returning Initializing status")
+        return Try(RunStatus.Initializing)
+      }
+      
+      val statusAttribute = item.get("status")
+      val statusString = statusAttribute.map(_.s()).getOrElse {
+        throw new RuntimeException(s"Status attribute not found for job $jobId in table $tableName")
+      }
+      
+      Log.info(s"Retrieved status $statusString for job $jobId from DynamoDB table $tableName")
+      Try(RunStatus.fromJobStatus(JobStatus.fromValue(statusString), jobId).getOrElse {
+        throw new RuntimeException(s"Could not convert status $statusString to RunStatus for job $jobId")
+      })
+    } catch {
+      case e: Exception =>
+        // If any exception occurs during DynamoDB query, fall back to using AWS Batch API
+        Log.warn(s"Exception when getting status from DynamoDB for job $jobId: ${e.getMessage}. Falling back to AWS Batch API.", e)
+        
+        // Fall back to the original method using Batch API
+        Try {
+          val jobDetail = detail(jobId) 
+          RunStatus.fromJobStatus(jobDetail.status, jobId).getOrElse {
+            throw new RuntimeException(s"Could not convert status ${jobDetail.status} to RunStatus for job $jobId")
+          }
+        }
+    }
+  }
 
   def detail(jobId: String): JobDetail = {
     val describeJobsResponse = batchClient.describeJobs(DescribeJobsRequest.builder.jobs(jobId).build)
@@ -861,5 +901,40 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
       .append("configRegion", configRegion)
       .append("awsAuthMode", optAwsAuthMode)
       .build
+  }
+
+  /**
+    * Get an item from a DynamoDB table
+    *
+    * @param tableName The name of the DynamoDB table
+    * @param keyName The name of the primary key attribute
+    * @param keyValue The value of the primary key
+    * @return Map of attribute names and values for the item, empty if not found
+    */
+  def getDynamoDbItem(tableName: String, keyName: String, keyValue: String): Map[String, AttributeValue] = {
+    try {
+      Log.debug(s"Getting item from DynamoDB table $tableName with key $keyName=$keyValue")
+      
+      val keyMap = Map(keyName -> AttributeValue.builder().s(keyValue).build())
+      
+      val request = GetItemRequest.builder()
+        .tableName(tableName)
+        .key(keyMap.asJava)
+        .build()
+      
+      val result = dynamoDbClient.getItem(request)
+      
+      if (result.hasItem) {
+        Log.debug(s"Found item in DynamoDB table $tableName")
+        result.item().asScala.toMap
+      } else {
+        Log.debug(s"Item not found in DynamoDB table $tableName")
+        Map.empty[String, AttributeValue]
+      }
+    } catch {
+      case e: Exception =>
+        Log.error(s"Error getting item from DynamoDB table $tableName: ${e.getMessage}", e)
+        Map.empty[String, AttributeValue]
+    }
   }
 }

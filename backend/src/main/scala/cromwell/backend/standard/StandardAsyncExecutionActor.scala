@@ -1188,8 +1188,7 @@ trait StandardAsyncExecutionActor
     previous match {
       case handle: PendingExecutionHandle[
         StandardAsyncJob@unchecked, StandardAsyncRunInfo@unchecked, StandardAsyncRunState@unchecked] =>
-
-        jobLogger.debug(s"$tag Polling Job ${handle.pendingJob}")
+        jobLogger.info(s"$tag Polling Job ${handle.pendingJob}")
         pollStatusAsync(handle) flatMap {
           backendRunStatus =>
             self ! WarnAboutSlownessIfNecessary
@@ -1259,6 +1258,7 @@ trait StandardAsyncExecutionActor
       case error: Error => throw error // JVM-ending calamity.
       case _: Throwable =>
         // Someone has subclassed or instantiated Throwable directly. Kill the job. They should be using an Exception.
+        jobLogger.warn("Fatal exception polling for status. Job will fail.")
         FailedNonRetryableExecutionHandle(throwable, kvPairsToSave = None)
     }
   }

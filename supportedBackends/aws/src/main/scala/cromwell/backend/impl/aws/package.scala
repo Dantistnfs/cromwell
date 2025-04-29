@@ -7,8 +7,6 @@ import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.batch.model.KeyValuePair
-import software.amazon.awssdk.retries.StandardRetryStrategy
-import software.amazon.awssdk.retries.api.BackoffStrategy
 
 import java.io.ByteArrayOutputStream
 import java.time.Duration
@@ -44,8 +42,7 @@ package object aws {
     // gzip+base64 can be larger on very small inputs than the input data
     // itself, so we don't want it super-small either. The proxy container
     // is designed to handle either of these variables.
-    val lim = 512 // This is completely arbitrary and I think 512 may even be
-    // too big when looking at the value manually in the console
+    val lim = 512
     data.length() match {
       case len if len <= lim => buildKVPair(prefix, data)
       case _ => buildKVPair(prefix + "_GZ", gzip(data))
@@ -72,21 +69,27 @@ package object aws {
     * @return a configured client for the AWS service
     */
   def configureClient[BuilderT <: AwsClientBuilder[BuilderT, ClientT], ClientT](builder: AwsClientBuilder[BuilderT, ClientT],
-                                                                                 awsAuthMode: Option[AwsAuthMode],
-                                                                                 configRegion: Option[Region]): ClientT = {
+                                                                               awsAuthMode: Option[AwsAuthMode],
+                                                                               configRegion: Option[Region]): ClientT = {
     awsAuthMode.foreach { awsAuthMode =>
       builder.credentialsProvider(awsAuthMode.provider())
     }
-
-    val backoffStrategy = BackoffStrategy.exponentialDelay(
-      Duration.ofMillis(300), Duration.ofSeconds(30)
-    )
-    val retryStrategy = StandardRetryStrategy.builder().backoffStrategy(backoffStrategy).throttlingBackoffStrategy(backoffStrategy).maxAttempts(30).build()
-
-    val configurationOverride = ClientOverrideConfiguration
-      .builder().retryStrategy(retryStrategy).build()
-    builder.overrideConfiguration(configurationOverride)
     configRegion.foreach(builder.region)
+
+    // Configure client with timeout settings that align with our retry policy
+    // of 15 maximum retries with exponential backoff up to 60 seconds
+    val overrideConfig = ClientOverrideConfiguration.builder()
+      // Total timeout for a complete API call including all retries
+      // 15 retries with a maximum of 60s delay each, plus some buffer
+      .apiCallTimeout(Duration.ofMinutes(20))  
+      // Timeout for an individual attempt before retrying
+      .apiCallAttemptTimeout(Duration.ofSeconds(60))
+      // Add our custom interceptor to handle 429 retries with jittering
+      .addExecutionInterceptor(new RateLimitRetryInterceptor())
+      .build()
+
+    builder.overrideConfiguration(overrideConfig)
+
     builder.build
   }
 }
