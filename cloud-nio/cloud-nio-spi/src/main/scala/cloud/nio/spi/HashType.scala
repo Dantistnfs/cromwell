@@ -15,6 +15,8 @@ object HashType extends Enumeration {
   val Md5: HashType.Value = Value
   // AWS S3 etag
   val S3Etag: HashType.Value = Value
+  // AWS S3 CRC64NVME checksum
+  val S3CRC64NVME: HashType.Value = Value
   val Sha256: HashType.Value = Value
 
   implicit class HashTypeValue(hashType: Value) {
@@ -40,6 +42,10 @@ object HashType extends Enumeration {
           case _ =>
             s"${org.apache.commons.codec.digest.DigestUtils.md5Hex(parts.mkString)}-${numChunks}"
         }
+      case S3CRC64NVME =>
+        // Not needed to implement as checksums are obtained directly from S3 API responses
+        // and not calculated client-side for our S3 call caching use case
+        "Not implemented"
       case Sha256 =>
         MessageDigest.getInstance("SHA-256").digest(s.getBytes).map("%02x" format _).mkString
     }

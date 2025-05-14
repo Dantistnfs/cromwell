@@ -79,7 +79,7 @@ private case object PartialS3BatchCommandBuilder extends PartialIoCommandBuilder
   }
 
   override def hashCommand: PartialFunction[Path, Try[IoHashCommand]] = {
-    case s3_path: S3Path => Try(S3BatchEtagCommand(s3_path).asInstanceOf[IoHashCommand])
+    case s3_path: S3Path => Try(S3BatchChecksumCommand(s3_path).asInstanceOf[IoHashCommand])
     case local_path: Path => Try(DefaultIoHashCommand(local_path))
   }
 
