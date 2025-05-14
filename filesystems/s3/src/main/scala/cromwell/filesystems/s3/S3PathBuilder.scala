@@ -179,6 +179,14 @@ case class S3Path private[s3](nioPath: NioPath,
 
   lazy val eTag = new S3Utils().getS3ObjectSummary(s3Path).eTag()
 
+  /**
+   * Get the checksum for this file, preferring CRC64NVME when available, otherwise falling back to eTag
+   */
+  lazy val getChecksum = {
+    val summary = new S3Utils().getS3ObjectSummary(s3Path)
+    Option(summary.checksumCRC64NVME()) getOrElse summary.eTag()
+  }
+
   /** Gets an absolute path for multiple forms of input. The FS provider does
    *  not support "toAbsolutePath" on forms such as "mypath/" or "foo.bar"
    *  So this function will prepend a forward slash for input that looks like this

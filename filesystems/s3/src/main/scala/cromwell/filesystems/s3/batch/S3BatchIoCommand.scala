@@ -113,6 +113,18 @@ case class S3BatchEtagCommand(override val file: S3Path) extends IoHashCommand(f
 }
 
 /**
+  * `IoCommand` to find the checksum of an s3 object (preferring CRC64NVME if available, with fallback to Etag)
+  * @param file the path to the object
+  */
+case class S3BatchChecksumCommand(override val file: S3Path) extends IoHashCommand(file) with S3BatchHeadCommand[String] {
+  override def mapResponse(response: HeadObjectResponse): String = {
+    // First check for CRC64NVME (the bucket default) and fall back to etag
+    Option(response.checksumCRC64NVME()).getOrElse(response.eTag())
+  }
+  override def commandDescription: String = s"S3BatchChecksumCommand file '$file'"
+}
+
+/**
   * `IoCommand` to "touch" an S3 object. The current implementation of `mapResponse` in this object doesn't do anything
   * as it is not clear that touch is meaningful in the context of S3
   * @param file the path to the object
