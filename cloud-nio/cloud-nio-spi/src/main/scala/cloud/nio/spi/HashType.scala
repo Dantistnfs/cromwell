@@ -45,7 +45,7 @@ object HashType extends Enumeration {
       case S3CRC64NVME =>
         // Not needed to implement as checksums are obtained directly from S3 API responses
         // and not calculated client-side for our S3 call caching use case
-        "Not implemented"
+        s
       case Sha256 =>
         MessageDigest.getInstance("SHA-256").digest(s.getBytes).map("%02x" format _).mkString
     }
