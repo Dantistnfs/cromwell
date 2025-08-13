@@ -42,6 +42,7 @@ import org.lerch.s3fs.util.S3Utils
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.{S3Client, S3Configuration}
+import software.amazon.awssdk.services.s3.model.{ChecksumMode, HeadObjectRequest}
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.language.postfixOps
@@ -180,11 +181,18 @@ case class S3Path private[s3](nioPath: NioPath,
   lazy val eTag = new S3Utils().getS3ObjectSummary(s3Path).eTag()
 
   /**
-   * Get the checksum for this file, preferring CRC64NVME when available, otherwise falling back to eTag
+   * Get the checksum for this file, preferring CRC64NVME when available, otherwise eTag
    */
   lazy val getChecksum = {
-    val summary = new S3Utils().getS3ObjectSummary(s3Path)
-    Option(summary.checksumCRC64NVME()) getOrElse summary.eTag()
+    val client = s3Path.getFileStore.getClient
+    val head = client.headObject(
+      HeadObjectRequest.builder()
+        .bucket(bucket)
+        .key(s3Path.getKey)
+        .checksumMode(ChecksumMode.ENABLED)
+        .build()
+    )
+    Option(head.checksumCRC64NVME()).getOrElse(head.eTag())
   }
 
   /** Gets an absolute path for multiple forms of input. The FS provider does

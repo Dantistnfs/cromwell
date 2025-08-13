@@ -140,7 +140,7 @@ final case class DefaultMode(override val name: String, region: Option[String]) 
   private lazy val _provider: AwsCredentialsProvider = {
     // The DefaultCredentialsProvider will look through a chain of standard AWS providers as
     // per the normal behaviour of aws-cli etc
-    val p = DefaultCredentialsProvider.create()
+    val p = DefaultCredentialsProvider.builder().build()
 
     // immediately validate the credentials that the provider will generate before returning the provider
     validateCredential(p, region)

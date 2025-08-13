@@ -58,10 +58,8 @@ public class S3Utils {
                 .size(metadata.contentLength())
                 .storageClass(metadata.storageClassAsString());
                 
-            // Add the CRC64NVME checksum to the object if it's available
-            if (metadata.checksumCRC64NVME() != null) {
-                builder.checksumCRC64NVME(metadata.checksumCRC64NVME());
-            }
+            // Note: CRC64NVME checksums are not available in the regular S3 client
+            // We'll implement CRC64NVME support using the AWS CRT client in a separate method
 
             return builder.build();
         } catch (S3Exception e) {

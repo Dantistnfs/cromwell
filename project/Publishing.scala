@@ -146,13 +146,13 @@ object Publishing {
     }
   }
 
-  private val broadArtifactoryResolver: Resolver =
-    "Broad Artifactory" at
-      "https://broadinstitute.jfrog.io/broadinstitute/libs-release/"
+  private val garResolver: Resolver =
+    "Google Artifact Registry" at
+      "https://us-central1-maven.pkg.dev/dsp-artifact-registry/libs-release/"
 
-  private val broadArtifactoryResolverSnap: Resolver =
-    "Broad Artifactory Snapshots" at
-      "https://broadinstitute.jfrog.io/broadinstitute/libs-snapshot-local/"
+  private val garResolverSnap: Resolver =
+    "Google Artifact Registry Snapshots" at
+      "https://us-central1-maven.pkg.dev/dsp-artifact-registry/libs-snapshot/"
 
   // https://stackoverflow.com/questions/9819965/artifactory-snapshot-filename-handling
   private val buildTimestamp = System.currentTimeMillis() / 1000
@@ -162,8 +162,8 @@ object Publishing {
       s"https://broadinstitute.jfrog.io/broadinstitute/libs-release-local;build.timestamp=$buildTimestamp/"
 
   val additionalResolvers = List(
-    broadArtifactoryResolver,
-    broadArtifactoryResolverSnap,
+    garResolver,
+    garResolverSnap,
     Resolver.sonatypeRepo("releases")
   )
 
@@ -202,7 +202,7 @@ object Publishing {
     * Retrieve the IBiblioResolver from sbt's Ivy setup.
     */
   private def getIBiblioResolver(ivy: Ivy): IBiblioResolver = {
-    ivy.getSettings.getResolver(broadArtifactoryResolver.name) match {
+    ivy.getSettings.getResolver(garResolver.name) match {
       case iBiblioResolver: IBiblioResolver => iBiblioResolver
       case other => sys.error(s"Expected an IBiblioResolver, got $other")
     }

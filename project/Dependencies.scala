@@ -6,7 +6,7 @@ object Dependencies {
   private val akkaV = "2.5.32" // scala-steward:off (CROM-6637)
   private val ammoniteOpsV = "2.4.1"
   private val apacheHttpClientV = "4.5.13"
-  private val awsSdkV = "2.26.19"
+  private val awsSdkV = "2.32.19"
   // We would like to use the BOM to manage Azure SDK versions, but SBT doesn't support it.
   // https://github.com/Azure/azure-sdk-for-java/tree/main/sdk/boms/azure-sdk-bom
   // https://github.com/sbt/sbt/issues/4531
@@ -354,6 +354,8 @@ object Dependencies {
     "com.google.guava" % "guava" % guavaV,
     "org.apache.tika" % "tika-core" % tikaV,
     "software.amazon.awssdk" % "s3" % awsSdkV,
+    "software.amazon.awssdk" % "aws-crt-client" % awsSdkV,
+    "software.amazon.awssdk.crt" % "aws-crt" % "0.38.3", // CRT for CRC64NVME
   ) ++ slf4jBindingDependencies
 
   private val awsCloudDependencies = List(

@@ -35,11 +35,11 @@ class NioFlow(parallelism: Int,
               numberOfAttempts: Int,
               commandBackpressureStaleness: FiniteDuration
               )(implicit ec: ExecutionContext) extends IoCommandStalenessBackpressuring {
-
+  
   implicit private val timer: Timer[IO] = IO.timer(ec)
 
   override def maxStaleness: FiniteDuration = commandBackpressureStaleness
-
+  
   private val processCommand: DefaultCommandContext[_] => IO[IoResult] = commandContext => {
 
     val onRetry: (Throwable, IoAttempts) => IoAttempts = (t, s) => {
@@ -121,10 +121,10 @@ class NioFlow(parallelism: Int,
     }
 
     def readFile: IO[String] = IO {
-      new String(
+    new String(
         command.file.limitFileContent(command.options.maxBytes, command.options.failOnOverflow),
-        StandardCharsets.UTF_8
-      )
+      StandardCharsets.UTF_8
+    )
     }
 
     def readFileAndChecksum: IO[String] = {
@@ -184,13 +184,16 @@ class NioFlow(parallelism: Int,
         drsPath.getFileHash
       }.map(Option(_))
       case s3Path: S3Path => IO {
-        // Get checksum (CRC64NVME if available, otherwise eTag)
+        // Get checksum (preferring CRC64NVME when available, otherwise eTag)
         val checksum = s3Path.getChecksum
-        // Check if this is the CRC64NVME or eTag
-        if (checksum != s3Path.eTag)
+        
+        // Check if this is a CRC64NVME checksum by comparing with eTag
+        // If they're different, it's likely a CRC64NVME checksum
+        if (checksum != s3Path.eTag) {
           Option(FileHash(HashType.S3CRC64NVME, checksum))
-        else
+        } else {
           Option(FileHash(HashType.S3Etag, checksum))
+        }
       }
       case _ => IO.pure(None)
     }

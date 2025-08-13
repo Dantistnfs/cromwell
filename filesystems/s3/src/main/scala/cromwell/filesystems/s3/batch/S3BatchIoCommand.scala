@@ -118,8 +118,10 @@ case class S3BatchEtagCommand(override val file: S3Path) extends IoHashCommand(f
   */
 case class S3BatchChecksumCommand(override val file: S3Path) extends IoHashCommand(file) with S3BatchHeadCommand[String] {
   override def mapResponse(response: HeadObjectResponse): String = {
-    // First check for CRC64NVME (the bucket default) and fall back to etag
-    Option(response.checksumCRC64NVME()).getOrElse(response.eTag())
+    // Prefer CRC64-NVME (full-object) then other checksum headers, finally eTag
+    Option(response.checksumCRC64NVME())                          // CRC64-NVME
+      .filter(_.nonEmpty)
+      .getOrElse(response.eTag())                                 // Fallback
   }
   override def commandDescription: String = s"S3BatchChecksumCommand file '$file'"
 }
