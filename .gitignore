@@ -53,3 +53,9 @@ exome_germline_single_sample_v1.3/
 **/*.pyc
 .scalafmt.conf
 .vscode/
+
+# compiled artifacts
+*.class
+**/target/
+/project/target/
+/**/target/
