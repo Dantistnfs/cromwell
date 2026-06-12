@@ -92,7 +92,8 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
                              efsDelocalize: Option[Boolean],
                              tagResources: Option[Boolean],
                              logGroupName: String,
-                             additionalTags: Map[String, String]
+                             additionalTags: Map[String, String],
+                             forceOnDemand: Boolean = false
                             ) {
 
 
@@ -607,12 +608,12 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
         .jobQueue(runtimeAttributes.queueArn)
         .jobDefinition(definitionArn)
 
-      if (runtimeAttributes.preemptible > 0) {
-        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
-      }
-
       if (runtimeAttributes.gpuCount >= 1) {
         submitJobRequest.jobQueue(runtimeAttributes.gpuQueueArn)
+      } else if (runtimeAttributes.preemptible > 0 && !forceOnDemand) {
+        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
+      } else if (forceOnDemand && runtimeAttributes.preemptible > 0) {
+        Log.info("Submitting to on-demand queue: spot instance preemptible exhausted after repeated spot reclamations")
       }
 
       val invalidCharsPattern = "[^a-zA-Z0-9_.:/=+-@]+".r

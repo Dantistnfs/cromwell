@@ -38,6 +38,12 @@ import cromwell.core.CallOutputs
 import wom.graph.CommandCallNode
 import cromwell.backend.impl.aws.callcaching.{AwsBatchBackendCacheHitCopyingActor, AwsBatchBackendFileHashingActor}
 import cromwell.backend.standard.callcaching.{StandardCacheHitCopyingActor, StandardFileHashingActor}
+import cromwell.backend.impl.aws.AwsBatchBackendLifecycleActorFactory.SpotKillCountKey
+
+object AwsBatchBackendLifecycleActorFactory {
+  val SpotKillCountKey = "SpotKillCount"
+}
+
 /**
   * Factory to create `Actor` objects to manage the lifecycle of a backend job on AWS Batch. This factory provides an
   * object from the `AwsBatchAsyncBackendJobExecutionActor` class to create and manage the job.
@@ -99,4 +105,7 @@ case class AwsBatchBackendLifecycleActorFactory(
   override def backendSingletonActorProps(serviceRegistryActor: ActorRef): Option[Props] = {
     Option(AwsBatchSingletonActor.props(configuration.awsConfig.region, Option(configuration.awsAuth)))
   }
+
+  override def defaultKeyValueStoreKeys: Seq[String] =
+    super.defaultKeyValueStoreKeys ++ Seq(SpotKillCountKey)
 }

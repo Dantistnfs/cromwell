@@ -103,17 +103,19 @@ case class AwsBatchRuntimeAttributes(cpu: Int Refined Positive,
                                      awsBatchExecutionRole: String = "",
                                      gpuQueueArn: String = "",
                                      preemptible: Int = 0,
-                                     preemptibleQueneArn: String = ""
-
+                                     preemptibleQueneArn: String = "",
+                                     spotKillMaxRetries: Int = 3
                                     )
 
 object AwsBatchRuntimeAttributes {
   val Log: Logger = LoggerFactory.getLogger(this.getClass)
   val QueueArnKey = "queueArn"
   val preemptibleKey = "preemptible"
-  private val preemptibleValidationInstance =   new IntRuntimeAttributesValidation(preemptibleKey)
+  private val preemptibleValidationInstance = new IntRuntimeAttributesValidation(preemptibleKey)
   val preemptibleQueneArnKey = "preemptibleQueueArn"
   val gpuQueueArnKey = "gpuQueueArn"
+  val spotKillMaxRetriesKey = "spotKillMaxRetries"
+  private val spotKillMaxRetriesValidationInstance = new IntRuntimeAttributesValidation(spotKillMaxRetriesKey)
 
   val scriptS3BucketKey = "scriptBucketName"
 
@@ -205,8 +207,11 @@ object AwsBatchRuntimeAttributes {
   private val dockerValidation: RuntimeAttributesValidation[String] = DockerValidation.instance
 
   private def queueArnValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] =
-    QueueArnValidation.withDefault(QueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
-      (throw new RuntimeException("queueArn is required")))
+    RuntimeAttributesValidation.withUsedInCallCaching(
+      QueueArnValidation.withDefault(QueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
+        (throw new RuntimeException("queueArn is required"))),
+      usedInCallCachingValue = false
+    )
 
 
   private def gpuQueueArnValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] =
@@ -214,11 +219,23 @@ object AwsBatchRuntimeAttributes {
       QueueArnValidation.configDefaultWomValue(runtimeConfig).get)
 
   private def preemptibleQueueArnValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] =
-    PreemptibleQueueArnValidation.withDefault(PreemptibleQueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
-      QueueArnValidation.configDefaultWomValue(runtimeConfig).get)
+    RuntimeAttributesValidation.withUsedInCallCaching(
+      PreemptibleQueueArnValidation.withDefault(PreemptibleQueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
+        QueueArnValidation.configDefaultWomValue(runtimeConfig).get),
+      usedInCallCachingValue = false
+    )
 
-  private def preemptibleValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Int] = preemptibleValidationInstance
-    .withDefault(preemptibleValidationInstance.configDefaultWomValue(runtimeConfig) getOrElse WomInteger(0))
+  private def preemptibleValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Int] =
+    RuntimeAttributesValidation.withUsedInCallCaching(
+      preemptibleValidationInstance.withDefault(preemptibleValidationInstance.configDefaultWomValue(runtimeConfig) getOrElse WomInteger(0)),
+      usedInCallCachingValue = false
+    )
+
+  private def spotKillMaxRetriesValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Int] =
+    RuntimeAttributesValidation.withUsedInCallCaching(
+      spotKillMaxRetriesValidationInstance.withDefault(spotKillMaxRetriesValidationInstance.configDefaultWomValue(runtimeConfig) getOrElse WomInteger(3)),
+      usedInCallCachingValue = false
+    )
 
   private def awsBatchRetryAttemptsValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[Int] = {
     AwsBatchRetryAttemptsValidation(awsBatchRetryAttemptsKey).withDefault(AwsBatchRetryAttemptsValidation(awsBatchRetryAttemptsKey)
@@ -306,7 +323,8 @@ object AwsBatchRuntimeAttributes {
       awsExecutionRoleValidation(runtimeConfig),
       gpuQueueArnValidation(runtimeConfig),
       preemptibleValidation(runtimeConfig),
-      preemptibleQueueArnValidation(runtimeConfig)
+      preemptibleQueueArnValidation(runtimeConfig),
+      spotKillMaxRetriesValidation(runtimeConfig)
     )
     def validationsLocalBackend  = StandardValidatedRuntimeAttributesBuilder.default(runtimeConfig).withValidation(
       cpuValidation(runtimeConfig),
@@ -331,7 +349,8 @@ object AwsBatchRuntimeAttributes {
       awsExecutionRoleValidation(runtimeConfig),
       gpuQueueArnValidation(runtimeConfig),
       preemptibleValidation(runtimeConfig),
-      preemptibleQueueArnValidation(runtimeConfig)
+      preemptibleQueueArnValidation(runtimeConfig),
+      spotKillMaxRetriesValidation(runtimeConfig)
    )
 
     configuration.fileSystem match  {
@@ -377,7 +396,8 @@ object AwsBatchRuntimeAttributes {
     val preemptible: Int = RuntimeAttributesValidation.extract(preemptibleValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
     val gpuQueue: String = RuntimeAttributesValidation.extract(gpuQueueArnValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
     val preemptibleQueue: String = RuntimeAttributesValidation.extract(preemptibleQueueArnValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
-    
+    val spotKillMaxRetries: Int = RuntimeAttributesValidation.extract(spotKillMaxRetriesValidation(runtimeAttrsConfig), validatedRuntimeAttributes)
+
     new AwsBatchRuntimeAttributes(
       cpu,
       gpuCount,
@@ -404,7 +424,8 @@ object AwsBatchRuntimeAttributes {
       awsExecutionRole,
       gpuQueue,
       preemptible,
-      preemptibleQueue
+      preemptibleQueue,
+      spotKillMaxRetries
     )
   }
 }
