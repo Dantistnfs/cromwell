@@ -36,7 +36,7 @@ import cromwell.backend.impl.aws.{AWSBatchStorageSystems, AwsBatchBackendInitial
 import cromwell.backend.io.JobPaths
 import cromwell.backend.standard.callcaching.{StandardCacheHitCopyingActor, StandardCacheHitCopyingActorParams}
 import cromwell.core.CallOutputs
-import cromwell.core.io.{DefaultIoCommandBuilder, IoCommand, IoCommandBuilder, IoTouchCommand}
+import cromwell.core.io.{DefaultIoCommandBuilder, IoCommand, IoCommandBuilder}
 import cromwell.core.path.Path
 import cromwell.core.simpleton.{WomValueBuilder, WomValueSimpleton}
 import cromwell.filesystems.s3.batch.S3BatchCommandBuilder
@@ -61,9 +61,12 @@ class AwsBatchBackendCacheHitCopyingActor(standardParams: StandardCacheHitCopyin
                                 ): Try[(CallOutputs, Set[IoCommand[_]])] = {
     (batchAttributes.fileSystem, cachingStrategy) match {
       case (AWSBatchStorageSystems.s3, UseOriginalCachedOutputs) =>
-        val touchCommands: Seq[Try[IoTouchCommand]] = womValueSimpletons collect {
+        // Validate each cached output still exists AND is non-empty. A hit on a 0-byte (or missing)
+        // output fails here, which surfaces as a CopyAttemptError -> invalidate-bad-cache-results ->
+        // re-execution, fixing the empty-output cache-poisoning failure.
+        val touchCommands: Seq[Try[IoCommand[_]]] = womValueSimpletons collect {
           case WomValueSimpleton(_, wdlFile: WomFile) =>
-            getPath(wdlFile.value) flatMap S3BatchCommandBuilder.touchCommand
+            getPath(wdlFile.value) flatMap S3BatchCommandBuilder.existsAndNonEmptyCommand
         }
 
         TryUtil.sequence(touchCommands) map {

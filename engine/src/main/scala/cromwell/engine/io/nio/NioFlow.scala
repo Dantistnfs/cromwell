@@ -77,6 +77,7 @@ class NioFlow(parallelism: Int,
       case hashCommand: IoHashCommand => hash(hashCommand) map hashCommand.success
       case touchCommand: IoTouchCommand => touch(touchCommand) map touchCommand.success
       case existsCommand: IoExistsCommand => exists(existsCommand) map existsCommand.success
+      case existsAndNonEmptyCommand: IoExistsAndNonEmptyCommand => existsAndNonEmpty(existsAndNonEmptyCommand) map existsAndNonEmptyCommand.success
       case readLinesCommand: IoReadLinesCommand => readLines(readLinesCommand) map readLinesCommand.success
       case isDirectoryCommand: IoIsDirectoryCommand => isDirectory(isDirectoryCommand) map isDirectoryCommand.success
       case _ => IO.raiseError(new UnsupportedOperationException("Method not implemented"))
@@ -205,6 +206,18 @@ class NioFlow(parallelism: Int,
 
   private def exists(exists: IoExistsCommand) = IO {
     exists.file.exists
+  }
+
+  private def existsAndNonEmpty(command: IoExistsAndNonEmptyCommand) = IO {
+    // `.size` performs a headObject on S3; it throws (e.g. NoSuchFileException) if the object is missing.
+    // A 0-byte object is treated as a failure so that a poisoned cache hit is invalidated and the job re-runs.
+    val size = command.file.size
+    if (size == 0L) {
+      throw new IOException(
+        s"Cached output '${command.file.pathAsString}' is 0 bytes; rejecting cache hit to force re-execution."
+      )
+    }
+    ()
   }
 
   private def readLines(exists: IoReadLinesCommand) = IO {

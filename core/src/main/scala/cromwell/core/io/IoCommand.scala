@@ -176,6 +176,16 @@ abstract class IoExistsCommand(val file: Path) extends SingleFileIoCommand[Boole
 }
 
 /**
+  * Validate that a file exists and is non-empty (size > 0), failing otherwise.
+  * Used by reference-mode call caching to reject 0-byte (or missing) cache hits so the
+  * hit is invalidated and the job re-executes.
+  */
+abstract class IoExistsAndNonEmptyCommand(val file: Path) extends SingleFileIoCommand[Unit] {
+  override def toString = s"validate ${file.pathAsString} exists and is non-empty"
+  override lazy val name = "validate non-empty"
+}
+
+/**
   * Return the lines of a file in a collection
   */
 abstract class IoReadLinesCommand(val file: Path) extends SingleFileIoCommand[Iterable[String]] {

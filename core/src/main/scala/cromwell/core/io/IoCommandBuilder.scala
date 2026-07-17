@@ -21,6 +21,7 @@ abstract class PartialIoCommandBuilder {
   def hashCommand: PartialFunction[Path, Try[IoHashCommand]] = PartialFunction.empty
   def touchCommand: PartialFunction[Path, Try[IoTouchCommand]] = PartialFunction.empty
   def existsCommand: PartialFunction[Path, Try[IoExistsCommand]] = PartialFunction.empty
+  def existsAndNonEmptyCommand: PartialFunction[Path, Try[IoExistsAndNonEmptyCommand]] = PartialFunction.empty
   def isDirectoryCommand: PartialFunction[Path, Try[IoIsDirectoryCommand]] = PartialFunction.empty
   def readLinesCommand: PartialFunction[Path, Try[IoReadLinesCommand]] = PartialFunction.empty
 }
@@ -90,6 +91,10 @@ class IoCommandBuilder(partialBuilders: List[PartialIoCommandBuilder] = List.emp
 
   def existsCommand(file: Path): Try[IoExistsCommand] = {
     buildOrDefault(_.existsCommand, file, DefaultIoExistsCommand(file))
+  }
+
+  def existsAndNonEmptyCommand(file: Path): Try[IoExistsAndNonEmptyCommand] = {
+    buildOrDefault(_.existsAndNonEmptyCommand, file, DefaultIoExistsAndNonEmptyCommand(file))
   }
 
   def isDirectoryCommand(file: Path): Try[IoIsDirectoryCommand] = {
