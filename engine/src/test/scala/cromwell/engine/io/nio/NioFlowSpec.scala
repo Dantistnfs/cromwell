@@ -96,6 +96,49 @@ class NioFlowSpec extends TestKitSuite with AsyncFlatSpecLike with Matchers with
     }
   }
 
+  it should "succeed validateNonEmpty for a non-empty Nio Path" in {
+    val testPath = DefaultPathBuilder.createTempFile()
+    testPath.write("hello")
+
+    val context = DefaultCommandContext(existsAndNonEmptyCommand(testPath).get, replyTo)
+    val testSource = Source.single(context)
+
+    val stream = testSource.via(flow).toMat(readSink)(Keep.right)
+
+    stream.run() map {
+      case (_: IoSuccess[_], _) => succeed
+      case (ack, _) => fail(s"validateNonEmpty returned an unexpected message:\n$ack\n\n")
+    }
+  }
+
+  it should "fail validateNonEmpty for a 0-byte Nio Path" in {
+    val testPath = DefaultPathBuilder.createTempFile() // empty by default
+
+    val context = DefaultCommandContext(existsAndNonEmptyCommand(testPath).get, replyTo)
+    val testSource = Source.single(context)
+
+    val stream = testSource.via(flow).toMat(readSink)(Keep.right)
+
+    stream.run() map {
+      case (failure: IoFailure[_], _) => failure.failure.getMessage should include ("0 bytes")
+      case (ack, _) => fail(s"validateNonEmpty returned an unexpected message:\n$ack\n\n")
+    }
+  }
+
+  it should "fail validateNonEmpty for a missing Nio Path" in {
+    val testPath = DefaultPathBuilder.build("/this/does/not/exist").get
+
+    val context = DefaultCommandContext(existsAndNonEmptyCommand(testPath).get, replyTo)
+    val testSource = Source.single(context)
+
+    val stream = testSource.via(flow).toMat(readSink)(Keep.right)
+
+    stream.run() map {
+      case (failure: IoFailure[_], _) => assert(failure.failure.getCause.isInstanceOf[NoSuchFileException])
+      case (ack, _) => fail(s"validateNonEmpty returned an unexpected message:\n$ack\n\n")
+    }
+  }
+
   it should "get hash from a Nio Path" in {
     val testPath = DefaultPathBuilder.createTempFile()
     testPath.write("hello")
