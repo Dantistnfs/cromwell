@@ -36,6 +36,7 @@ import cromwell.backend.BackendConfigurationDescriptor
 import cromwell.core.{BackendDockerConfiguration}
 import cromwell.core.path.PathBuilderFactory
 import cromwell.cloudsupport.aws.AwsConfiguration
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 
 class AwsBatchConfiguration(val configurationDescriptor: BackendConfigurationDescriptor) {
 
@@ -64,6 +65,13 @@ class AwsBatchConfiguration(val configurationDescriptor: BackendConfigurationDes
   val globLinkCommand = batchAttributes.globLinkCommand
   val checkSiblingMd5 = batchAttributes.checkSiblingMd5
   val preemptibilityTableName = batchAttributes.preemptibilityTableName
+
+  // Shared across all workflow initializations on this backend — avoids creating a new HTTP
+  // thread pool per workflow start. Lives for the lifetime of the backend (JVM exit cleans up).
+  lazy val preemptibilityDynamoDbClient: Option[DynamoDbClient] =
+    preemptibilityTableName.map { _ =>
+      configureClient(DynamoDbClient.builder(), Option(awsAuth), awsConfig.region)
+    }
 }
 
 object AWSBatchStorageSystems {
