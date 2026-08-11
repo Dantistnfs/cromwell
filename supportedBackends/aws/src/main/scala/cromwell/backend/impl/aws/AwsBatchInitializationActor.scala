@@ -232,7 +232,13 @@ class AwsBatchInitializationActor(params: AwsBatchInitializationActorParams)
     prov            <- provider
     recommendations <- configuration.preemptibilityTableName match {
       case Some(table) =>
-        fetchPreemptibilityRecommendations(table, params.calls).recover { case ex =>
+        fetchPreemptibilityRecommendations(table, params.calls).map { recs =>
+          if (recs.nonEmpty)
+            Log.info(s"Loaded ${recs.size} preemptibility recommendation(s) from $table: ${recs.map { case (k, v) => s"$k=$v" }.mkString(", ")}")
+          else
+            Log.info(s"No preemptibility recommendations found in $table for this workflow's tasks")
+          recs
+        }.recover { case ex =>
           Log.warn(s"Failed to fetch preemptibility recommendations from DynamoDB; routing will use WDL preemptible attribute only. Cause: ${ex.getMessage}")
           Map.empty[String, String]
         }
