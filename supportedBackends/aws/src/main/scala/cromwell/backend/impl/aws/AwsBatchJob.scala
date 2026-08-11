@@ -117,7 +117,7 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
   }
 
   // One client per job instance — status() is polled repeatedly so per-call construction is too expensive.
-  // Lifecycle: closed by GC when the job case class is released after the actor terminates.
+  // Closed explicitly in AwsBatchAsyncBackendJobExecutionActor.postStop().
   lazy val dynamoDbClient: DynamoDbClient =
     configureClient(DynamoDbClient.builder(), optAwsAuthMode, configRegion)
 

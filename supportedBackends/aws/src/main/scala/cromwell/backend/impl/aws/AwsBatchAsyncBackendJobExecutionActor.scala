@@ -222,6 +222,11 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
     configureClient(builder, batchJob.optAwsAuthMode, batchJob.configRegion)
   }
 
+  override def postStop(): Unit = {
+    Try(batchJob.dynamoDbClient.close())
+    super.postStop()
+  }
+
   /* Tries to abort the job in flight
    *
    * @param job A StandardAsyncJob object (has jobId value) to cancel
@@ -760,14 +765,16 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
 
               val isOom: Boolean = containerRC match {
                 case None =>
-                  // No container exit code — check container reason anyway; a non-spot AWS failure
-                  // may still carry OOM keywords without producing an exit code.
+                  // No exit code means the container was killed externally (spot reclamation or infra failure).
+                  // Linux OOM kills always produce exit code 137, so no-RC cannot be OOM.
+                  // Checking container.reason here would cause spot kills with incidental OOM-like reason
+                  // strings to be misclassified as OOM, suppressing on-demand escalation.
                   val containerReason = Try(Option(attempt.container.reason).getOrElse("")).getOrElse("")
                   if (containerReason.nonEmpty)
                     Log.debug(s"No container RC for job '${job.jobId}', container reason: '$containerReason'")
                   else
                     Log.debug(s"No container RC for job '${job.jobId}'")
-                  retryMemoryKeys.nonEmpty && retryMemoryKeys.exists(containerReason.contains)
+                  false
                 case Some(0) =>
                   Log.debug("Container exit code was zero. Job succeeded")
                   false
