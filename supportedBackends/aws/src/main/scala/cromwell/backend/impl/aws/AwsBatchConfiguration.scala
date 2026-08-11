@@ -63,6 +63,7 @@ class AwsBatchConfiguration(val configurationDescriptor: BackendConfigurationDes
   val tagResources = batchAttributes.tagResources
   val globLinkCommand = batchAttributes.globLinkCommand
   val checkSiblingMd5 = batchAttributes.checkSiblingMd5
+  val preemptibilityTableName = batchAttributes.preemptibilityTableName
 }
 
 object AWSBatchStorageSystems {

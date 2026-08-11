@@ -207,11 +207,8 @@ object AwsBatchRuntimeAttributes {
   private val dockerValidation: RuntimeAttributesValidation[String] = DockerValidation.instance
 
   private def queueArnValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] =
-    RuntimeAttributesValidation.withUsedInCallCaching(
-      QueueArnValidation.withDefault(QueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
-        (throw new RuntimeException("queueArn is required"))),
-      usedInCallCachingValue = false
-    )
+    QueueArnValidation.withDefault(QueueArnValidation.configDefaultWomValue(runtimeConfig) getOrElse
+      (throw new RuntimeException("queueArn is required")))
 
 
   private def gpuQueueArnValidation(runtimeConfig: Option[Config]): RuntimeAttributesValidation[String] =

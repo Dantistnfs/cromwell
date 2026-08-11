@@ -41,9 +41,7 @@ case class AwsBatchBackendInitializationData
   override val runtimeAttributesBuilder: StandardValidatedRuntimeAttributesBuilder,
   configuration: AwsBatchConfiguration,
   provider: AwsCredentialsProvider,
-  // TODO: We'll need something specific for batch probably, but I need to
-  //       understand more about the genomics node first
-  //genomics: Genomics
+  preemptibilityRecommendations: Map[String, String] = Map.empty,
 ) extends StandardInitializationData(workflowPaths, runtimeAttributesBuilder, AwsBatchBackendInitializationDataUtility.getExpressionFunctionsClass(configuration.fileSystem))
 
 object  AwsBatchBackendInitializationDataUtility {

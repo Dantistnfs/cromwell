@@ -64,7 +64,8 @@ case class AwsBatchAttributes(fileSystem: String,
                               tagResources: Option[Boolean],
                               efsDelocalize: Option[Boolean],
                               globLinkCommand: Option[String],
-                              checkSiblingMd5: Option[Boolean]
+                              checkSiblingMd5: Option[Boolean],
+                              preemptibilityTableName: Option[String],
                               )
 
 object AwsBatchAttributes {
@@ -95,7 +96,8 @@ object AwsBatchAttributes {
     "efsMakeMD5",
     "tagResources",
     "maxRetries",
-    "glob-link-command"
+    "glob-link-command",
+    "preemptibility.dynamodb-table",
   )
 
   private val deprecatedAwsBatchKeys: Map[String, String] = Map(
@@ -207,6 +209,12 @@ object AwsBatchAttributes {
       }
     }
 
+    val preemptibilityTableName: ErrorOr[Option[String]] = validate {
+      if (backendConfig.hasPath("preemptibility.dynamodb-table"))
+        Some(backendConfig.getString("preemptibility.dynamodb-table"))
+      else None
+    }
+
     (
       fileSysStr,
       filesystemAuthMode,
@@ -220,7 +228,8 @@ object AwsBatchAttributes {
       efsDelocalize,
       tagResources,
       globLinkCommand,
-      checkSiblingMd5
+      checkSiblingMd5,
+      preemptibilityTableName,
     ).tupled.map((AwsBatchAttributes.apply _).tupled) match {
       case Valid(r) => r
       case Invalid(f) =>

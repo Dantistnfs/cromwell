@@ -35,6 +35,8 @@ import java.io.IOException
 
 import akka.actor.ActorRef
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, BatchGetItemRequest, KeysAndAttributes}
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
 import software.amazon.awssdk.services.secretsmanager.model.{CreateSecretRequest, SecretsManagerException, SecretListEntry, UpdateSecretRequest}
 import cromwell.filesystems.s3.batch.S3BatchCommandBuilder
@@ -49,7 +51,7 @@ import spray.json.{JsObject, JsString}
 import org.slf4j.{Logger, LoggerFactory}
 import cromwell.backend.impl.aws.io.AwsBatchWorkflowPaths
 
-import scala.concurrent.Future
+import scala.concurrent.{Future, blocking}
 import scala.jdk.CollectionConverters._
 
 case class AwsBatchInitializationActorParams
@@ -153,14 +155,90 @@ class AwsBatchInitializationActor(params: AwsBatchInitializationActorParams)
     case None => Log.debug("No docker token was passed")
   }
 
+  private def fetchPreemptibilityRecommendations(
+    tableName: String,
+    calls: Set[CommandCallNode]
+  ): Future[Map[String, String]] = {
+    if (calls.isEmpty) return Future.successful(Map.empty)
+    Future {
+      blocking {
+        val client = configureClient(
+          DynamoDbClient.builder(),
+          Option(configuration.awsAuth),
+          configuration.awsConfig.region
+        )
+        try {
+          val workflowName = workflowDescriptor.callable.name
+          // Deduplicate by FQN: two calls with the same FQN produce the same DynamoDB key,
+          // and BatchGetItem rejects duplicate primary keys with ValidationException.
+          val allKeys = calls.toList.map(_.identifier.fullyQualifiedName.value).distinct.map { taskFqn =>
+            val taskKey = s"$workflowName#$taskFqn"
+            Map("task_key" -> AttributeValue.builder().s(taskKey).build()).asJava
+          }
+
+          // Retry unprocessed keys (DynamoDB returns them when read capacity is exceeded).
+          def fetchChunk(keys: java.util.List[java.util.Map[String, AttributeValue]]): List[(String, String)] = {
+            val buf = scala.collection.mutable.ListBuffer.empty[(String, String)]
+            var pending: java.util.List[java.util.Map[String, AttributeValue]] = keys
+            var attempt = 0
+            while (!pending.isEmpty && attempt < 3) {
+              attempt += 1
+              val resp = client.batchGetItem(
+                BatchGetItemRequest.builder()
+                  .requestItems(Map(tableName -> KeysAndAttributes.builder().keys(pending).build()).asJava)
+                  .build()
+              )
+              buf ++= resp.responses().asScala.get(tableName).toList.flatMap(_.asScala).flatMap { item =>
+                for {
+                  keyAttr <- Option(item.get("task_key"))
+                  recAttr <- Option(item.get("recommendation"))
+                  taskName = keyAttr.s().split('#').last
+                  rec      = recAttr.s()
+                } yield taskName -> rec
+              }
+              pending = resp.unprocessedKeys().asScala
+                .get(tableName)
+                .fold(java.util.Collections.emptyList[java.util.Map[String, AttributeValue]]())(_.keys())
+              if (!pending.isEmpty && attempt < 3)
+                Log.warn(s"DynamoDB returned ${pending.size()} unprocessed preemptibility keys; retrying (attempt ${attempt + 1}/3)")
+            }
+            if (!pending.isEmpty)
+              Log.warn(s"${pending.size()} preemptibility keys remain unprocessed after 3 attempts; those tasks will use WDL routing")
+            buf.toList
+          }
+
+          // BatchGetItem is limited to 100 keys per request.
+          // Each chunk is isolated: a failure in one chunk does not discard results from others.
+          allKeys.grouped(100).flatMap { chunk =>
+            try fetchChunk(chunk.asJava)
+            catch { case ex: Exception =>
+              Log.warn(s"Failed to fetch preemptibility chunk (${chunk.size} tasks): ${ex.getMessage}; skipping chunk")
+              Nil
+            }
+          }.toMap
+        } finally {
+          client.close()
+        }
+      }
+    }
+  }
+
   override lazy val workflowPaths: Future[AwsBatchWorkflowPaths] = for {
     prov <- provider
   } yield new AwsBatchWorkflowPaths(workflowDescriptor, prov, configuration)
 
   override lazy val initializationData: Future[AwsBatchBackendInitializationData] = for {
-    workflowPaths <- workflowPaths
-    prov <- provider
-  } yield AwsBatchBackendInitializationData(workflowPaths, runtimeAttributesBuilder, configuration, prov)
+    workflowPaths   <- workflowPaths
+    prov            <- provider
+    recommendations <- configuration.preemptibilityTableName match {
+      case Some(table) =>
+        fetchPreemptibilityRecommendations(table, params.calls).recover { case ex =>
+          Log.warn(s"Failed to fetch preemptibility recommendations from DynamoDB; routing will use WDL preemptible attribute only. Cause: ${ex.getMessage}")
+          Map.empty[String, String]
+        }
+      case None => Future.successful(Map.empty[String, String])
+    }
+  } yield AwsBatchBackendInitializationData(workflowPaths, runtimeAttributesBuilder, configuration, prov, recommendations)
 
   override lazy val ioCommandBuilder =  {
     val conf = Option(configuration) match {

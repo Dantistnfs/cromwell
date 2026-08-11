@@ -497,8 +497,8 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
       definitionFor(AwsBatchRuntimeAttributes.preemptibleQueneArnKey).usedInCallCaching shouldBe false
     }
 
-    "exclude queueArn from call cache hash comparison" in {
-      definitionFor(AwsBatchRuntimeAttributes.QueueArnKey).usedInCallCaching shouldBe false
+    "include queueArn in call cache hash comparison" in {
+      definitionFor(AwsBatchRuntimeAttributes.QueueArnKey).usedInCallCaching shouldBe true
     }
 
     "exclude spotKillMaxRetries from call cache hash comparison" in {

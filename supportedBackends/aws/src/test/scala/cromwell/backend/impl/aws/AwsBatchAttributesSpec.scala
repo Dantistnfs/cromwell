@@ -57,6 +57,20 @@ class AwsBatchAttributesSpec extends AnyFlatSpec with CromwellTimeoutSpec with M
     attributes.executionBucket should be("s3://myBucket")
   }
 
+  it should "parse preemptibility.dynamodb-table when present" taggedAs IntegrationTest in {
+    val backendConfig = ConfigFactory.parseString(
+      configString() + "\npreemptibility.dynamodb-table = \"task-preemptibility-prod\""
+    )
+    val attributes = AwsBatchAttributes.fromConfigs(config, backendConfig)
+    attributes.preemptibilityTableName should be(Some("task-preemptibility-prod"))
+  }
+
+  it should "leave preemptibilityTableName as None when preemptibility block is absent" taggedAs IntegrationTest in {
+    val backendConfig = ConfigFactory.parseString(configString())
+    val attributes = AwsBatchAttributes.fromConfigs(config, backendConfig)
+    attributes.preemptibilityTableName should be(None)
+  }
+
   it should "not parse invalid config" taggedAs IntegrationTest in {
     val nakedConfig =
       ConfigFactory.parseString(

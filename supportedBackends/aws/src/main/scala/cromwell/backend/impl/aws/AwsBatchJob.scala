@@ -93,7 +93,8 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
                              tagResources: Option[Boolean],
                              logGroupName: String,
                              additionalTags: Map[String, String],
-                             forceOnDemand: Boolean = false
+                             forceOnDemand: Boolean = false,
+                             preemptibilityRecommendation: Option[String] = None,
                             ) {
 
 
@@ -115,10 +116,11 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
     configureClient(builder, optAwsAuthMode, configRegion)
   }
 
-  lazy val dynamoDbClient: DynamoDbClient = {
-    val builder = DynamoDbClient.builder()
-    configureClient(builder, optAwsAuthMode, configRegion)
-  }
+  // One client per job instance — status() is polled repeatedly so per-call construction is too expensive.
+  // Lifecycle: closed by GC when the job case class is released after the actor terminates.
+  lazy val dynamoDbClient: DynamoDbClient =
+    configureClient(DynamoDbClient.builder(), optAwsAuthMode, configRegion)
+
 
   /**
     * The goal of the reconfigured script is to do 3 things:
@@ -612,8 +614,12 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
         submitJobRequest.jobQueue(runtimeAttributes.gpuQueueArn)
       } else if (runtimeAttributes.preemptible > 0 && !forceOnDemand) {
         submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
+      } else if (preemptibilityRecommendation.contains("spot_with_fallback") && !forceOnDemand) {
+        Log.info(s"Routing to spot queue per DynamoDB preemptibility recommendation for task ${jobDescriptor.taskCall.fullyQualifiedName}")
+        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
       } else if (forceOnDemand && runtimeAttributes.preemptible > 0) {
         Log.info("Submitting to on-demand queue: spot instance preemptible exhausted after repeated spot reclamations")
+        submitJobRequest.jobQueue(runtimeAttributes.queueArn)
       }
 
       val invalidCharsPattern = "[^a-zA-Z0-9_.:/=+-@]+".r
@@ -915,16 +921,11 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
   def getDynamoDbItem(tableName: String, keyName: String, keyValue: String): Map[String, AttributeValue] = {
     try {
       Log.debug(s"Getting item from DynamoDB table $tableName with key $keyName=$keyValue")
-      
-      val keyMap = Map(keyName -> AttributeValue.builder().s(keyValue).build())
-      
       val request = GetItemRequest.builder()
         .tableName(tableName)
-        .key(keyMap.asJava)
+        .key(Map(keyName -> AttributeValue.builder().s(keyValue).build()).asJava)
         .build()
-      
       val result = dynamoDbClient.getItem(request)
-      
       if (result.hasItem) {
         Log.debug(s"Found item in DynamoDB table $tableName")
         result.item().asScala.toMap
