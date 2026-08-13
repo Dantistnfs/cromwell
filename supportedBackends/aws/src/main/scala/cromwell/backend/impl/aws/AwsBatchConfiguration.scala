@@ -65,6 +65,19 @@ class AwsBatchConfiguration(val configurationDescriptor: BackendConfigurationDes
   val globLinkCommand = batchAttributes.globLinkCommand
   val checkSiblingMd5 = batchAttributes.checkSiblingMd5
   val preemptibilityTableName = batchAttributes.preemptibilityTableName
+  val defaultQueueArn: String =
+    if (configurationDescriptor.backendConfig.hasPath("default-runtime-attributes.queueArn"))
+      configurationDescriptor.backendConfig.getString("default-runtime-attributes.queueArn")
+    else ""
+
+  // Gate: DynamoDB-backed spot routing requires a spot queue ARN to route to.
+  // Catch the misconfiguration at startup rather than at job submission time.
+  if (preemptibilityTableName.isDefined && !configurationDescriptor.backendConfig.hasPath("default-runtime-attributes.preemptibleQueueArn"))
+    throw new IllegalArgumentException(
+      "Backend configuration error: 'preemptibility.dynamodb-table' requires " +
+      "'default-runtime-attributes.preemptibleQueueArn' to be configured. " +
+      "Both must be set together for DynamoDB-backed spot routing to work."
+    )
 
   // Shared across all workflow initializations on this backend — avoids creating a new HTTP
   // thread pool per workflow start. Lives for the lifetime of the backend (JVM exit cleans up).

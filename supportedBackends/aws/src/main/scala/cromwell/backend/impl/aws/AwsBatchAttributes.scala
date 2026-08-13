@@ -210,9 +210,10 @@ object AwsBatchAttributes {
     }
 
     val preemptibilityTableName: ErrorOr[Option[String]] = validate {
-      if (backendConfig.hasPath("preemptibility.dynamodb-table"))
-        Some(backendConfig.getString("preemptibility.dynamodb-table"))
-      else None
+      if (backendConfig.hasPath("preemptibility.dynamodb-table")) {
+        val v = backendConfig.getString("preemptibility.dynamodb-table").trim
+        if (v.nonEmpty) Some(v) else None
+      } else None
     }
 
     (

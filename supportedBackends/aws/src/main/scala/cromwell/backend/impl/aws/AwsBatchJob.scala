@@ -95,6 +95,7 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
                              additionalTags: Map[String, String],
                              forceOnDemand: Boolean = false,
                              preemptibilityRecommendation: Option[String] = None,
+                             defaultQueueArn: String = "",
                             ) {
 
 
@@ -614,11 +615,17 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
         submitJobRequest.jobQueue(runtimeAttributes.gpuQueueArn)
       } else if (runtimeAttributes.preemptible > 0 && !forceOnDemand) {
         submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
-      } else if (preemptibilityRecommendation.contains("spot_with_fallback") && !forceOnDemand) {
+      } else if (preemptibilityRecommendation.contains("spot_with_fallback") && !forceOnDemand
+                 && (defaultQueueArn.isEmpty || runtimeAttributes.queueArn == defaultQueueArn)) {
+        if (runtimeAttributes.preemptibleQueneArn.isBlank)
+          throw new RuntimeException(
+            s"DynamoDB recommended 'spot_with_fallback' for '${jobDescriptor.taskCall.fullyQualifiedName}' " +
+            "but 'preemptibleQueueArn' is not configured for this task"
+          )
         Log.info(s"Routing to spot queue per DynamoDB preemptibility recommendation for task ${jobDescriptor.taskCall.fullyQualifiedName}")
         submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
-      } else if (forceOnDemand && runtimeAttributes.preemptible > 0) {
-        Log.info("Submitting to on-demand queue: spot instance preemptible exhausted after repeated spot reclamations")
+      } else if (forceOnDemand && (runtimeAttributes.preemptible > 0 || preemptibilityRecommendation.contains("spot_with_fallback"))) {
+        Log.info(s"Submitting to on-demand queue: spot reclamation threshold reached for task ${jobDescriptor.taskCall.fullyQualifiedName}")
         submitJobRequest.jobQueue(runtimeAttributes.queueArn)
       }
 

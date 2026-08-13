@@ -213,7 +213,8 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
       runtimeAttributes.logGroupName,
       runtimeAttributes.additionalTags,
       forceOnDemand = preemptibleExhausted,
-      preemptibilityRecommendation = preemptibilityRecommendation)
+      preemptibilityRecommendation = preemptibilityRecommendation,
+      defaultQueueArn = configuration.defaultQueueArn)
   }
 
   // setup batch client to query job container info
