@@ -59,6 +59,8 @@ import cromwell.core.retry.SimpleExponentialBackoff
 import cromwell.filesystems.s3.S3Path
 import cromwell.filesystems.s3.batch.S3BatchCommandBuilder
 import cromwell.services.keyvalue.KvClient
+import cromwell.services.keyvalue.KeyValueServiceActor.{KvJobKey, KvPair, ScopedKey}
+import cromwell.backend.impl.aws.AwsBatchBackendLifecycleActorFactory.SpotKillCountKey
 import org.slf4j.{Logger, LoggerFactory}
 import software.amazon.awssdk.services.batch.BatchClient
 import software.amazon.awssdk.services.batch.model._
@@ -69,7 +71,9 @@ import wom.types.{WomArrayType, WomSingleFileType}
 import wom.values._
 
 import scala.concurrent._
+import scala.concurrent.blocking
 import scala.concurrent.duration._
+import scala.jdk.CollectionConverters._
 import scala.language.postfixOps
 import scala.util.control.NoStackTrace
 import scala.util.{Failure, Success, Try}
@@ -104,6 +108,15 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
   import AwsBatchAsyncBackendJobExecutionActor._
 
   val Log: Logger = LoggerFactory.getLogger(AwsBatchAsyncBackendJobExecutionActor.getClass)
+
+  lazy val previousSpotKillCount: Int = jobDescriptor.prefetchedKvStoreEntries.get(SpotKillCountKey) match {
+    case Some(KvPair(_, v)) => Try(v.toInt).getOrElse(0)
+    case _ => 0
+  }
+
+  // spotKillMaxRetries=0 means "never auto-escalate to on-demand"; treat it as unlimited spot retries.
+  lazy val preemptibleExhausted: Boolean =
+    runtimeAttributes.spotKillMaxRetries > 0 && previousSpotKillCount >= runtimeAttributes.spotKillMaxRetries
 
   override type StandardAsyncRunInfo = AwsBatchJob
 
@@ -179,6 +192,8 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
   }
 
   lazy val batchJob: AwsBatchJob = {
+    val taskName = jobDescriptor.taskCall.identifier.fullyQualifiedName.value
+    val preemptibilityRecommendation = initializationData.preemptibilityRecommendations.get(taskName)
     AwsBatchJob(
       jobDescriptor,
       runtimeAttributes,
@@ -196,13 +211,21 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
       Option(runtimeAttributes.efsDelocalize),
       Option(runtimeAttributes.tagResources),
       runtimeAttributes.logGroupName,
-      runtimeAttributes.additionalTags)
+      runtimeAttributes.additionalTags,
+      forceOnDemand = preemptibleExhausted,
+      preemptibilityRecommendation = preemptibilityRecommendation,
+      defaultQueueArn = configuration.defaultQueueArn)
   }
 
   // setup batch client to query job container info
   lazy val batchClient: BatchClient = {
     val builder = BatchClient.builder()
     configureClient(builder, batchJob.optAwsAuthMode, batchJob.configRegion)
+  }
+
+  override def postStop(): Unit = {
+    Try(batchJob.dynamoDbClient.close())
+    super.postStop()
   }
 
   /* Tries to abort the job in flight
@@ -601,15 +624,41 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
       // Only check stderr size if we need to, otherwise this results in a lot of unnecessary I/O that
       // may fail due to race conditions on quickly-executing jobs.
       stderrSize <- if (failOnStdErr) asyncIo.sizeAsync(stderr) else Future.successful(0L)
-      retryWithMoreMemory <- if (status.toString == "Failed") memoryRetryRC(oldHandle.pendingJob) else Future.successful(false)
-    } yield (stderrSize, returnCodeAsString, retryWithMoreMemory)
+      (retryWithMoreMemory, spotKill) <- if (status.toString == "Failed") detectFailureReasons(oldHandle.pendingJob) else Future.successful((false, false))
+    } yield (stderrSize, returnCodeAsString, retryWithMoreMemory, spotKill)
 
     stderrSizeAndReturnCodeAndMemoryRetry flatMap {
-      case (stderrSize, returnCodeAsString, retryWithMoreMemory) =>
+      case (stderrSize, returnCodeAsString, retryWithMoreMemory, spotKill) =>
         val tryReturnCodeAsInt = Try(returnCodeAsString.trim.toInt)
         jobLogger.debug(s"Handling execution Result with status '${status.toString()}' and returnCode ${returnCodeAsString}")
         if (isDone(status)) {
           tryReturnCodeAsInt match {
+            // spot instance reclamation: checked first so continueOnReturnCode/failOnStdErr arms
+            // cannot intercept a spot kill that wrote an RC file before the instance was reclaimed.
+            case Success(returnCodeAsInt) if spotKill =>
+              val newCount = previousSpotKillCount + 1
+              if (runtimeAttributes.spotKillMaxRetries > 0 && newCount >= runtimeAttributes.spotKillMaxRetries)
+                jobLogger.warn(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}): threshold reached, next attempt will use on-demand queue")
+              else
+                jobLogger.info(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}): retrying on spot")
+              val executionHandle = Future.successful(FailedNonRetryableExecutionHandle(
+                WrongReturnCode(jobDescriptor.key.tag, returnCodeAsInt, stderrAsOption),
+                Option(returnCodeAsInt),
+                Some(spotKillKvPairsForNextAttempt(newCount))
+              ))
+              retryElseFail(executionHandle)
+            // spot kill with no parseable RC file (killed before RC was written)
+            case Failure(_) if spotKill =>
+              val newCount = previousSpotKillCount + 1
+              if (runtimeAttributes.spotKillMaxRetries > 0 && newCount >= runtimeAttributes.spotKillMaxRetries)
+                jobLogger.warn(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}, no RC): threshold reached, next attempt will use on-demand queue")
+              else
+                jobLogger.info(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}, no RC): retrying on spot")
+              val executionHandle = Future.successful(FailedNonRetryableExecutionHandle(
+                ReturnCodeIsNotAnInt(jobDescriptor.key.tag, returnCodeAsString, stderrAsOption),
+                kvPairsToSave = Some(spotKillKvPairsForNextAttempt(newCount))
+              ))
+              retryElseFail(executionHandle)
             // stderr not empty : retry
             case Success(returnCodeAsInt) if failOnStdErr && stderrSize.intValue > 0 =>
               val executionHandle = Future.successful(FailedNonRetryableExecutionHandle(StderrNonEmpty(jobDescriptor.key.tag, stderrSize, stderrAsOption), Option(returnCodeAsInt), None))
@@ -685,72 +734,80 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
      } yield jobRC
    }
 
-   // new OOM detection
-   def memoryRetryRC(job: StandardAsyncJob): Future[Boolean] = Future {
-      // STATUS LOGIC:
-      //   - success : container exit code is zero
-      //   - command failure: container exit code > 0, no statusReason in container
-      //   - OOM kill : container exit code > 0, statusReason contains "OutOfMemory" OR exit code == 137
-      //   - spot kill : no container exit code set. statusReason of ATTEMPT (not container) says "host EC2 (...) terminated"
-      Log.debug(s"Looking for memoryRetry in job '${job.jobId}'")
-      val describeJobsResponse = batchClient.describeJobs(DescribeJobsRequest.builder.jobs(job.jobId).build)
-      val jobDetail = describeJobsResponse.jobs.get(0) //OrElse(throw new RuntimeException(s"Could not get job details for job '${job.jobId}'"))
-      val nrAttempts = jobDetail.attempts.size
-      // if job is terminated/cancelled before starting, there are no attempts.
-      val lastattempt =
-          try {
-              jobDetail.attempts.get(nrAttempts-1)
-          } catch {
-              case _ : Throwable => null
+  // Single AWS Batch describe call that returns both (isOomKill, isSpotKill).
+  // STATUS LOGIC:
+  //   - success            : container exit code is zero
+  //   - command failure    : container exit code > 0, no statusReason in container
+  //   - OOM kill           : container exit code == 137, OR container reason matches memoryRetryErrorKeys
+  //   - spot kill          : no container exit code, attempt-level statusReason contains "host EC2 (...) terminated"
+  def detectFailureReasons(job: StandardAsyncJob): Future[(Boolean, Boolean)] = Future {
+    blocking {
+      Log.debug(s"Detecting failure reasons for job '${job.jobId}'")
+      val jobsResponse = batchClient.describeJobs(DescribeJobsRequest.builder.jobs(job.jobId).build)
+      val jobDetailOpt = jobsResponse.jobs.asScala.headOption
+
+      jobDetailOpt match {
+        case None =>
+          Log.warn(s"Job '${job.jobId}' not found in AWS Batch describeJobs response; treating as no attempts.")
+          (false, false)
+        case Some(jobDetail) =>
+          val lastAttemptOpt = Try(jobDetail.attempts.get(jobDetail.attempts.size - 1)).toOption
+
+          lastAttemptOpt match {
+            case None =>
+              Log.info(s"No attempts were made for job '${job.jobId}'. No memory or spot-related retry needed.")
+              (false, false)
+            case Some(attempt) =>
+              // null-safe: AWS SDK returns java.lang.Integer which may be null for spot-killed containers
+              val containerRC: Option[Int] =
+                Try(attempt.container.exitCode).toOption.flatMap(rc => Option(rc).map(_.intValue))
+
+              val retryMemoryKeys = memoryRetryErrorKeys.toList.flatten
+
+              val isOom: Boolean = containerRC match {
+                case None =>
+                  // No exit code means the container was killed externally (spot reclamation or infra failure).
+                  // Linux OOM kills always produce exit code 137, so no-RC cannot be OOM.
+                  // Checking container.reason here would cause spot kills with incidental OOM-like reason
+                  // strings to be misclassified as OOM, suppressing on-demand escalation.
+                  val containerReason = Try(Option(attempt.container.reason).getOrElse("")).getOrElse("")
+                  if (containerReason.nonEmpty)
+                    Log.debug(s"No container RC for job '${job.jobId}', container reason: '$containerReason'")
+                  else
+                    Log.debug(s"No container RC for job '${job.jobId}'")
+                  false
+                case Some(0) =>
+                  Log.debug("Container exit code was zero. Job succeeded")
+                  false
+                case Some(137) =>
+                  Log.info("Job failed with Container status reason: 'OutOfMemory' (code:137)")
+                  true
+                case _ =>
+                  val containerReason = Option(attempt.container.reason).getOrElse("")
+                  if (containerReason.nonEmpty)
+                    Log.warn(s"Job failed with Container status reason: '$containerReason'")
+                  else
+                    Log.debug("No exit reason found for container.")
+                  val retry = retryMemoryKeys.exists(containerReason.contains)
+                  Log.debug(s"Retry job based on provided keys: '$retry'")
+                  retry
+              }
+
+              val isSpot: Boolean = !isOom && containerRC.isEmpty && {
+                val attemptReason = Option(attempt.statusReason).getOrElse("").toLowerCase
+                attemptReason.contains("host ec2")
+              }
+
+              (isOom, isSpot)
           }
-      if (lastattempt == null ) {
-        Log.info(s"No attempts were made for job '${job.jobId}'. no memory-related retry needed.")
-        false
       }
-      var containerRC =
-          try {
-              lastattempt.container.exitCode
-          } catch {
-              case _ : Throwable => null
-          }
-      // if missing, set to failed.
-      if (containerRC == null ) {
-          Log.debug(s"No RC found for job '${job.jobId}', most likely a spot kill")
-          containerRC = 1
-      }
-      // if not zero => get reason, else set retry to false.
-      containerRC.toString() match {
-        case "0" =>
-            Log.debug("container exit code was zero. job succeeded")
-            false
-        case "137" =>
-            Log.info("Job failed with Container status reason : 'OutOfMemory' (code:137)")
-            true
-        case _ =>
-            // failed job due to command errors (~ user errors) don't have a container exit reason.
-            val containerStatusReason:String = {
-               var lastReason =  lastattempt.container.reason
-               // cast null to empty-string to prevent nullpointer exception.
-               if (lastReason == null || lastReason.isEmpty) {
-                   lastReason = ""
-                   log.debug("No exit reason found for container.")
-               } else {
-                   Log.warn(s"Job failed with Container status reason : '${lastReason}'")
-               }
-               lastReason
-            }
-            // check the list of OOM-keys against the exit reason.
-            val RetryMemoryKeys = memoryRetryErrorKeys.toList.flatten
-            val retry = RetryMemoryKeys.exists(containerStatusReason.contains)
-            Log.debug(s"Retry job based on provided keys : '${retry}'")
-            retry
-      }
+    }
+  }
 
-
-   }
-
-
-
+  private def spotKillKvPairsForNextAttempt(newCount: Int): Seq[KvPair] = {
+    val nextJobKey = KvJobKey(jobDescriptor.key.call.fullyQualifiedName, jobDescriptor.key.index, jobDescriptor.key.attempt + 1)
+    Seq(KvPair(ScopedKey(jobDescriptor.workflowDescriptor.id, nextJobKey, SpotKillCountKey), newCount.toString))
+  }
 
   // Despite being a "runtime" exception, BatchExceptions for 429 (too many requests) are *not* fatal:
   override def isFatal(throwable: Throwable): Boolean = throwable match {

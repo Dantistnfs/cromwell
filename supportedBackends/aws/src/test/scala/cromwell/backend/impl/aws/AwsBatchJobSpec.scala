@@ -506,4 +506,19 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
     expected should equal(actual)
   }
 
+  it should "store spot_with_fallback recommendation on the job instance" in {
+    val job = AwsBatchJob(jobDescriptor, runtimeAttributes, "commandLine", script,
+      "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
+      Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
+      forceOnDemand = false,
+      preemptibilityRecommendation = Some("spot_with_fallback"))
+    job.preemptibilityRecommendation should be(Some("spot_with_fallback"))
+  }
+
+  it should "store no preemptibilityRecommendation when not provided" in {
+    val job = generateBasicJob
+    job.preemptibilityRecommendation should be(None)
+  }
+
 }

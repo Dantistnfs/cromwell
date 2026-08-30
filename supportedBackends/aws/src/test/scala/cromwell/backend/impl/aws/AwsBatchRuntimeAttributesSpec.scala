@@ -482,6 +482,34 @@ class AwsBatchRuntimeAttributesSpec extends AnyWordSpecLike with CromwellTimeout
     assert(actualRuntimeAttributes == expectedRuntimeAttributes)
   }
 
+  "call cache key stability" should {
+
+    def definitionFor(key: String) = {
+      val defs = AwsBatchRuntimeAttributes.runtimeAttributesBuilder(configuration).definitions
+      defs.find(_.name == key).getOrElse(fail(s"No definition for '$key'"))
+    }
+
+    "exclude preemptible from call cache hash comparison" in {
+      definitionFor(AwsBatchRuntimeAttributes.preemptibleKey).usedInCallCaching shouldBe false
+    }
+
+    "exclude preemptibleQueueArn from call cache hash comparison" in {
+      definitionFor(AwsBatchRuntimeAttributes.preemptibleQueneArnKey).usedInCallCaching shouldBe false
+    }
+
+    "include queueArn in call cache hash comparison" in {
+      definitionFor(AwsBatchRuntimeAttributes.QueueArnKey).usedInCallCaching shouldBe true
+    }
+
+    "exclude spotKillMaxRetries from call cache hash comparison" in {
+      definitionFor(AwsBatchRuntimeAttributes.spotKillMaxRetriesKey).usedInCallCaching shouldBe false
+    }
+
+    "include docker in call cache hash comparison" in {
+      definitionFor("docker").usedInCallCaching shouldBe true
+    }
+  }
+
   private def assertAwsBatchRuntimeAttributesSuccessfulCreation(runtimeAttributes: Map[String, WomValue],
                                                            expectedRuntimeAttributes: AwsBatchRuntimeAttributes,
                                                            workflowOptions: WorkflowOptions = emptyWorkflowOptions,

@@ -92,7 +92,10 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
                              efsDelocalize: Option[Boolean],
                              tagResources: Option[Boolean],
                              logGroupName: String,
-                             additionalTags: Map[String, String]
+                             additionalTags: Map[String, String],
+                             forceOnDemand: Boolean = false,
+                             preemptibilityRecommendation: Option[String] = None,
+                             defaultQueueArn: String = "",
                             ) {
 
 
@@ -114,10 +117,11 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
     configureClient(builder, optAwsAuthMode, configRegion)
   }
 
-  lazy val dynamoDbClient: DynamoDbClient = {
-    val builder = DynamoDbClient.builder()
-    configureClient(builder, optAwsAuthMode, configRegion)
-  }
+  // One client per job instance — status() is polled repeatedly so per-call construction is too expensive.
+  // Closed explicitly in AwsBatchAsyncBackendJobExecutionActor.postStop().
+  lazy val dynamoDbClient: DynamoDbClient =
+    configureClient(DynamoDbClient.builder(), optAwsAuthMode, configRegion)
+
 
   /**
     * The goal of the reconfigured script is to do 3 things:
@@ -607,12 +611,22 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
         .jobQueue(runtimeAttributes.queueArn)
         .jobDefinition(definitionArn)
 
-      if (runtimeAttributes.preemptible > 0) {
-        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
-      }
-
       if (runtimeAttributes.gpuCount >= 1) {
         submitJobRequest.jobQueue(runtimeAttributes.gpuQueueArn)
+      } else if (runtimeAttributes.preemptible > 0 && !forceOnDemand) {
+        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
+      } else if (preemptibilityRecommendation.contains("spot_with_fallback") && !forceOnDemand
+                 && (defaultQueueArn.isEmpty || runtimeAttributes.queueArn == defaultQueueArn)) {
+        if (runtimeAttributes.preemptibleQueneArn.isBlank)
+          throw new RuntimeException(
+            s"DynamoDB recommended 'spot_with_fallback' for '${jobDescriptor.taskCall.fullyQualifiedName}' " +
+            "but 'preemptibleQueueArn' is not configured for this task"
+          )
+        Log.info(s"Routing to spot queue per DynamoDB preemptibility recommendation for task ${jobDescriptor.taskCall.fullyQualifiedName}")
+        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
+      } else if (forceOnDemand && (runtimeAttributes.preemptible > 0 || preemptibilityRecommendation.contains("spot_with_fallback"))) {
+        Log.info(s"Submitting to on-demand queue: spot reclamation threshold reached for task ${jobDescriptor.taskCall.fullyQualifiedName}")
+        submitJobRequest.jobQueue(runtimeAttributes.queueArn)
       }
 
       val invalidCharsPattern = "[^a-zA-Z0-9_.:/=+-@]+".r
@@ -914,16 +928,11 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
   def getDynamoDbItem(tableName: String, keyName: String, keyValue: String): Map[String, AttributeValue] = {
     try {
       Log.debug(s"Getting item from DynamoDB table $tableName with key $keyName=$keyValue")
-      
-      val keyMap = Map(keyName -> AttributeValue.builder().s(keyValue).build())
-      
       val request = GetItemRequest.builder()
         .tableName(tableName)
-        .key(keyMap.asJava)
+        .key(Map(keyName -> AttributeValue.builder().s(keyValue).build()).asJava)
         .build()
-      
       val result = dynamoDbClient.getItem(request)
-      
       if (result.hasItem) {
         Log.debug(s"Found item in DynamoDB table $tableName")
         result.item().asScala.toMap

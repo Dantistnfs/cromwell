@@ -64,7 +64,8 @@ case class AwsBatchAttributes(fileSystem: String,
                               tagResources: Option[Boolean],
                               efsDelocalize: Option[Boolean],
                               globLinkCommand: Option[String],
-                              checkSiblingMd5: Option[Boolean]
+                              checkSiblingMd5: Option[Boolean],
+                              preemptibilityTableName: Option[String],
                               )
 
 object AwsBatchAttributes {
@@ -83,10 +84,15 @@ object AwsBatchAttributes {
     "filesystems.local.caching.check-sibling-md5",
     "filesystems.s3.auth",
     "filesystems.s3.caching.duplication-strategy",
+    "filesystems.s3.duplication-strategy",
     "auth",
     "numCreateDefinitionAttempts",
     "numSubmitAttempts",
     "default-runtime-attributes.scriptBucketName",
+    "default-runtime-attributes.awsBatchExecutionRole",
+    "default-runtime-attributes.gpuQueueArn",
+    "default-runtime-attributes.preemptible",
+    "default-runtime-attributes.preemptibleQueueArn",
     "awsBatchRetryAttempts",
     "awsBatchEvaluateOnExit",
     "ulimits",
@@ -95,7 +101,8 @@ object AwsBatchAttributes {
     "efsMakeMD5",
     "tagResources",
     "maxRetries",
-    "glob-link-command"
+    "glob-link-command",
+    "preemptibility.dynamodb-table",
   )
 
   private val deprecatedAwsBatchKeys: Map[String, String] = Map(
@@ -207,6 +214,13 @@ object AwsBatchAttributes {
       }
     }
 
+    val preemptibilityTableName: ErrorOr[Option[String]] = validate {
+      if (backendConfig.hasPath("preemptibility.dynamodb-table")) {
+        val v = backendConfig.getString("preemptibility.dynamodb-table").trim
+        if (v.nonEmpty) Some(v) else None
+      } else None
+    }
+
     (
       fileSysStr,
       filesystemAuthMode,
@@ -220,7 +234,8 @@ object AwsBatchAttributes {
       efsDelocalize,
       tagResources,
       globLinkCommand,
-      checkSiblingMd5
+      checkSiblingMd5,
+      preemptibilityTableName,
     ).tupled.map((AwsBatchAttributes.apply _).tupled) match {
       case Valid(r) => r
       case Invalid(f) =>
