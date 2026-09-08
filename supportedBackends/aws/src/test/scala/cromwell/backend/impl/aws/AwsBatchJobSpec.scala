@@ -346,11 +346,16 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
          |  local file_path="$$1"
          |  # file size
          |  file_size=$$(stat --printf="%s" "$$file_path")
-         |  # chunk_size : you can have at most 10K parts with at least one 5MB part
-         |  # this reflects the formula in s3-copy commands of cromwell (S3FileSystemProvider.java)
-         |  #   => long partSize = Math.max((objectSize / 10000L) + 1, 5 * 1024 * 1024);
+         |  # chunk_size: S3 allows at most 10K parts. This previously used a 5MB
+         |  # floor (mirroring cromwell S3FileSystemProvider.java), which split multi-GB
+         |  # outputs into thousands of tiny parts and drove the bulk of the S3 PUT
+         |  # (Tier-1) request cost. Raised the floor to 128MB to cut PUT.PART ~90%
+         |  # with no throughput loss (the classic transfer client honors
+         |  # multipart_chunksize). The (file_size/10000)+1 term stays as the
+         |  # <=10K-part backstop for very large (>1.28TB) files.
+         |  #   => partSize = max((objectSize / 10000) + 1, 128 * 1024 * 1024);
          |  a=$$(( ( file_size / 10000) + 1 ))
-         |  b=$$(( 5 * 1024 * 1024 ))
+         |  b=$$(( 128 * 1024 * 1024 ))
          |  chunk_size=$$(( a > b ? a : b ))
          |  echo $$chunk_size
          |}
