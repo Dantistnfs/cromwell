@@ -764,12 +764,21 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
 
               val retryMemoryKeys = memoryRetryErrorKeys.toList.flatten
 
-              val isOom: Boolean = containerRC match {
+              // Spot reclamation is authoritative and checked FIRST. AWS Batch reports
+              // "Host EC2 (instance ...) terminated" in the attempt statusReason whenever the host was
+              // reclaimed, regardless of whether the container managed to write an exit code before the
+              // SIGTERM/SIGKILL. A reclamation frequently races the task to a non-zero RC (e.g. `set -e`
+              // aborting a command mid-run), leaving containerRC = Some(1). Requiring an empty RC here
+              // caused those to be misclassified as WrongReturnCode (or OOM on 137), which bypassed the
+              // on-demand escalation and kept the task looping on spot. Classify spot by statusReason
+              // regardless of exit code, and only evaluate OOM/memory-retry when it was NOT a spot kill.
+              val attemptReason = Option(attempt.statusReason).getOrElse("").toLowerCase
+              val isSpot: Boolean = attemptReason.contains("host ec2")
+
+              val isOom: Boolean = !isSpot && (containerRC match {
                 case None =>
-                  // No exit code means the container was killed externally (spot reclamation or infra failure).
+                  // No exit code and not a host reclamation: killed externally (infra failure).
                   // Linux OOM kills always produce exit code 137, so no-RC cannot be OOM.
-                  // Checking container.reason here would cause spot kills with incidental OOM-like reason
-                  // strings to be misclassified as OOM, suppressing on-demand escalation.
                   val containerReason = Try(Option(attempt.container.reason).getOrElse("")).getOrElse("")
                   if (containerReason.nonEmpty)
                     Log.debug(s"No container RC for job '${job.jobId}', container reason: '$containerReason'")
@@ -791,12 +800,10 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
                   val retry = retryMemoryKeys.exists(containerReason.contains)
                   Log.debug(s"Retry job based on provided keys: '$retry'")
                   retry
-              }
+              })
 
-              val isSpot: Boolean = !isOom && containerRC.isEmpty && {
-                val attemptReason = Option(attempt.statusReason).getOrElse("").toLowerCase
-                attemptReason.contains("host ec2")
-              }
+              if (isSpot)
+                Log.info(s"Spot reclamation detected for job '${job.jobId}' (statusReason: '${attempt.statusReason}', containerRC: $containerRC)")
 
               (isOom, isSpot)
           }
