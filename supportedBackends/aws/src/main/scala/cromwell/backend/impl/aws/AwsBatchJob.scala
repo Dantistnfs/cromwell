@@ -683,34 +683,44 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
 
     Log.debug(s"s3 object name for script is calculated to be s3://$bucketName/$scriptKeyPrefix$key")
 
-    try { //try and get the object
+    // Retry ONLY transient DNS-resolution failures (UnknownHostException, usually wrapped in
+    // SdkClientException). NoSuchKeyException is caught inside and means "script not staged yet" —
+    // that is expected and must NOT trigger a retry. If DNS is throttled longer than our retries,
+    // the failure is surfaced so the submission fails cleanly (and Cromwell retries the job) rather
+    // than the task being orphaned in "Running" with no jobId. See UnknownHostRetry (SINFRA).
+    UnknownHostRetry.withDnsRetry(s"stage command script to s3://$bucketName/$scriptKeyPrefix$key") {
+      try { //try and get the object
 
-      s3Client.getObject( GetObjectRequest.builder().bucket(bucketName).key( scriptKeyPrefix + key).build )
-      s3Client.headObject(HeadObjectRequest.builder()
-        .bucket(bucketName)
-        .key( scriptKeyPrefix + key )
-        .build
-      ).eTag().equals(key) // as key is the md5 of script content, and script is small (<8mb) => key should be equal to eTag if the file exists.
-
-      // if there's no exception then the script already exists
-      Log.debug(s"""Found script $bucketName/$scriptKeyPrefix$key""")
-    } catch {
-      case _: NoSuchKeyException =>  //this happens if there is no object with that key in the bucket
-        val putRequest = PutObjectRequest.builder()
-          .bucket(bucketName) //remove the "s3://" prefix
-          .key(scriptKeyPrefix + key)
+        s3Client.getObject( GetObjectRequest.builder().bucket(bucketName).key( scriptKeyPrefix + key).build )
+        s3Client.headObject(HeadObjectRequest.builder()
+          .bucket(bucketName)
+          .key( scriptKeyPrefix + key )
           .build
+        ).eTag().equals(key) // as key is the md5 of script content, and script is small (<8mb) => key should be equal to eTag if the file exists.
 
-        s3Client.putObject(putRequest, RequestBody.fromString(commandLine))
+        // if there's no exception then the script already exists
+        Log.debug(s"""Found script $bucketName/$scriptKeyPrefix$key""")
+      } catch {
+        case _: NoSuchKeyException =>  //this happens if there is no object with that key in the bucket
+          val putRequest = PutObjectRequest.builder()
+            .bucket(bucketName) //remove the "s3://" prefix
+            .key(scriptKeyPrefix + key)
+            .build
 
-        Log.debug(s"Created script $key")
+          s3Client.putObject(putRequest, RequestBody.fromString(commandLine))
+
+          Log.debug(s"Created script $key")
+      }
     }
     key
   }
 
   private def writeReconfiguredScriptForAudit( reconfiguredScript: String, bucketName: String, key: String) = {
     val putObjectRequest = PutObjectRequest.builder().bucket(bucketName).key(key).build()
-    s3Client.putObject(putObjectRequest, RequestBody.fromString(reconfiguredScript))
+    // Same transient-DNS resilience as findOrCreateS3Script (SINFRA orphaned-job incident).
+    UnknownHostRetry.withDnsRetry(s"write reconfigured-script audit to s3://$bucketName/$key") {
+      s3Client.putObject(putObjectRequest, RequestBody.fromString(reconfiguredScript))
+    }
   }
 
   /** Creates a job definition in AWS Batch
