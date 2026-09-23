@@ -114,9 +114,16 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
     case _ => 0
   }
 
-  // spotKillMaxRetries=0 means "never auto-escalate to on-demand"; treat it as unlimited spot retries.
-  lazy val preemptibleExhausted: Boolean =
-    runtimeAttributes.spotKillMaxRetries > 0 && previousSpotKillCount >= runtimeAttributes.spotKillMaxRetries
+  // Extra on-demand attempts tolerated for spot-*reclamation* after escalating off spot (on-demand
+  // hosts are essentially never reclaimed; this only guards a rare on-demand host loss). Genuine
+  // on-demand job failures are handled separately by the normal maxRetries budget.
+  private val OnDemandReclamationGrace = 2
+
+  // Total spot reclamations tolerated before the task is failed. 0 spotKillMaxRetries => no spot
+  // (the queue function routes such tasks to on-demand), so no reclamation is tolerated.
+  private def maxSpotReclamations: Int =
+    if (runtimeAttributes.spotKillMaxRetries <= 0) 0
+    else runtimeAttributes.spotKillMaxRetries + OnDemandReclamationGrace
 
   override type StandardAsyncRunInfo = AwsBatchJob
 
@@ -212,7 +219,7 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
       Option(runtimeAttributes.tagResources),
       runtimeAttributes.logGroupName,
       runtimeAttributes.additionalTags,
-      forceOnDemand = preemptibleExhausted,
+      spotKillCount = previousSpotKillCount,
       preemptibilityRecommendation = preemptibilityRecommendation,
       defaultQueueArn = configuration.defaultQueueArn)
   }
@@ -635,30 +642,9 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
           tryReturnCodeAsInt match {
             // spot instance reclamation: checked first so continueOnReturnCode/failOnStdErr arms
             // cannot intercept a spot kill that wrote an RC file before the instance was reclaimed.
-            case Success(returnCodeAsInt) if spotKill =>
-              val newCount = previousSpotKillCount + 1
-              if (runtimeAttributes.spotKillMaxRetries > 0 && newCount >= runtimeAttributes.spotKillMaxRetries)
-                jobLogger.warn(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}): threshold reached, next attempt will use on-demand queue")
-              else
-                jobLogger.info(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}): retrying on spot")
-              val executionHandle = Future.successful(FailedNonRetryableExecutionHandle(
-                WrongReturnCode(jobDescriptor.key.tag, returnCodeAsInt, stderrAsOption),
-                Option(returnCodeAsInt),
-                Some(spotKillKvPairsForNextAttempt(newCount))
-              ))
-              retryElseFail(executionHandle)
+            case Success(returnCodeAsInt) if spotKill => handleSpotKill(Option(returnCodeAsInt), stderrAsOption)
             // spot kill with no parseable RC file (killed before RC was written)
-            case Failure(_) if spotKill =>
-              val newCount = previousSpotKillCount + 1
-              if (runtimeAttributes.spotKillMaxRetries > 0 && newCount >= runtimeAttributes.spotKillMaxRetries)
-                jobLogger.warn(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}, no RC): threshold reached, next attempt will use on-demand queue")
-              else
-                jobLogger.info(s"Spot reclamation detected (kill $newCount/${runtimeAttributes.spotKillMaxRetries}, no RC): retrying on spot")
-              val executionHandle = Future.successful(FailedNonRetryableExecutionHandle(
-                ReturnCodeIsNotAnInt(jobDescriptor.key.tag, returnCodeAsString, stderrAsOption),
-                kvPairsToSave = Some(spotKillKvPairsForNextAttempt(newCount))
-              ))
-              retryElseFail(executionHandle)
+            case Failure(_) if spotKill => handleSpotKill(None, stderrAsOption)
             // stderr not empty : retry
             case Success(returnCodeAsInt) if failOnStdErr && stderrSize.intValue > 0 =>
               val executionHandle = Future.successful(FailedNonRetryableExecutionHandle(StderrNonEmpty(jobDescriptor.key.tag, stderrSize, stderrAsOption), Option(returnCodeAsInt), None))
@@ -814,6 +800,37 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
   private def spotKillKvPairsForNextAttempt(newCount: Int): Seq[KvPair] = {
     val nextJobKey = KvJobKey(jobDescriptor.key.call.fullyQualifiedName, jobDescriptor.key.index, jobDescriptor.key.attempt + 1)
     Seq(KvPair(ScopedKey(jobDescriptor.workflowDescriptor.id, nextJobKey, SpotKillCountKey), newCount.toString))
+  }
+
+  /**
+   * A spot reclamation is a retryable *infrastructure* failure, not a job failure: it must NOT consume
+   * the general `maxRetries` budget. We bump the single `SpotKillCount` counter (which drives the next
+   * attempt's queue selection in AwsBatchJob) and return a FailedRetryableExecutionHandle, which
+   * `retryElseFail` retries unconditionally with `incFailedCount=false` (never touching maxRetries /
+   * FailedRetryCount). The retry is bounded by `maxSpotReclamations`; once exceeded we fail terminally,
+   * bypassing `retryElseFail` so the maxRetries gate cannot resurrect it.
+   */
+  private def handleSpotKill(returnCode: Option[Int], stderrOption: Option[Path]): Future[ExecutionHandle] = {
+    val newCount = previousSpotKillCount + 1
+    if (newCount > maxSpotReclamations) {
+      jobLogger.error(s"Spot reclamation #$newCount exceeds the budget " +
+        s"(spotKillMaxRetries=${runtimeAttributes.spotKillMaxRetries}, on-demand grace=$OnDemandReclamationGrace); failing task.")
+      Future.successful(FailedNonRetryableExecutionHandle(
+        TooManySpotReclamations(jobDescriptor.key.tag, newCount, runtimeAttributes.spotKillMaxRetries, stderrOption),
+        returnCode,
+        kvPairsToSave = None
+      ))
+    } else {
+      if (runtimeAttributes.spotKillMaxRetries > 0 && newCount >= runtimeAttributes.spotKillMaxRetries)
+        jobLogger.warn(s"Spot reclamation #$newCount (spot budget ${runtimeAttributes.spotKillMaxRetries} reached): next attempt will use the on-demand queue")
+      else
+        jobLogger.info(s"Spot reclamation #$newCount (spot budget ${runtimeAttributes.spotKillMaxRetries}): retrying on spot")
+      retryElseFail(Future.successful(FailedRetryableExecutionHandle(
+        SpotReclaimed(jobDescriptor.key.tag, newCount, stderrOption),
+        returnCode,
+        Some(spotKillKvPairsForNextAttempt(newCount))
+      )))
+    }
   }
 
   // Despite being a "runtime" exception, BatchExceptions for 429 (too many requests) are *not* fatal:

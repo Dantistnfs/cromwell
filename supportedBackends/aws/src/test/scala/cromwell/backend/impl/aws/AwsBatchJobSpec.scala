@@ -516,7 +516,7 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
       jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
-      forceOnDemand = false,
+      spotKillCount = 0,
       preemptibilityRecommendation = Some("spot_with_fallback"))
     job.preemptibilityRecommendation should be(Some("spot_with_fallback"))
   }
@@ -524,6 +524,61 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
   it should "store no preemptibilityRecommendation when not provided" in {
     val job = generateBasicJob
     job.preemptibilityRecommendation should be(None)
+  }
+
+  // ---- queue routing (resolvedJobQueue) ----
+
+  private val onDemandArn = runtimeAttributes.queueArn
+  private val spotArn = "arn:aws:batch:us-east-1:123456789:job-queue/spot"
+  private val gpuArn = "arn:aws:batch:us-east-1:123456789:job-queue/gpu"
+
+  private def jobWith(ra: AwsBatchRuntimeAttributes,
+                      spotKillCount: Int = 0,
+                      recommendation: Option[String] = None,
+                      defaultQueueArn: String = ""): AwsBatchJob =
+    AwsBatchJob(jobDescriptor, ra, "commandLine", script,
+      "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
+      Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
+      spotKillCount = spotKillCount, preemptibilityRecommendation = recommendation, defaultQueueArn = defaultQueueArn)
+
+  it should "route a preemptible task to spot while under spotKillMaxRetries, then to on-demand" in {
+    val ra = runtimeAttributes.copy(preemptible = 1, preemptibleQueneArn = spotArn, spotKillMaxRetries = 3)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(spotArn)
+    jobWith(ra, spotKillCount = 2).resolvedJobQueue should be(spotArn)
+    jobWith(ra, spotKillCount = 3).resolvedJobQueue should be(onDemandArn)
+    jobWith(ra, spotKillCount = 5).resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "honor a spot_with_fallback recommendation only when the task did not override queueArn" in {
+    val ra = runtimeAttributes.copy(preemptibleQueneArn = spotArn, spotKillMaxRetries = 3)
+    // queueArn == defaultQueueArn => not overridden => spot
+    jobWith(ra, recommendation = Some("spot_with_fallback"), defaultQueueArn = ra.queueArn)
+      .resolvedJobQueue should be(spotArn)
+    // queueArn != defaultQueueArn => task pinned its own queue => on-demand
+    jobWith(ra, recommendation = Some("spot_with_fallback"),
+      defaultQueueArn = "arn:aws:batch:us-east-1:123456789:job-queue/other")
+      .resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "always route GPU tasks to the gpu queue, never spot" in {
+    val ra = runtimeAttributes.copy(gpuCount = 1, gpuQueueArn = gpuArn, preemptible = 1, preemptibleQueneArn = spotArn)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(gpuArn)
+  }
+
+  it should "route to on-demand when spotKillMaxRetries is 0 (spot disabled)" in {
+    val ra = runtimeAttributes.copy(preemptible = 1, preemptibleQueneArn = spotArn, spotKillMaxRetries = 0)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "route non-spot-eligible tasks to on-demand" in {
+    val ra = runtimeAttributes.copy(preemptible = 0, spotKillMaxRetries = 3)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "throw when a spot-eligible task has a blank preemptibleQueueArn" in {
+    val ra = runtimeAttributes.copy(preemptible = 1, preemptibleQueneArn = "", spotKillMaxRetries = 3)
+    an[RuntimeException] should be thrownBy jobWith(ra, spotKillCount = 0).resolvedJobQueue
   }
 
 }

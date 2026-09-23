@@ -93,7 +93,7 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
                              tagResources: Option[Boolean],
                              logGroupName: String,
                              additionalTags: Map[String, String],
-                             forceOnDemand: Boolean = false,
+                             spotKillCount: Int = 0,
                              preemptibilityRecommendation: Option[String] = None,
                              defaultQueueArn: String = "",
                             ) {
@@ -102,6 +102,38 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
   val Log: Logger = LoggerFactory.getLogger(AwsBatchJob.getClass)
   //this will be the "folder" that scripts will live in (underneath the script bucket)
   val scriptKeyPrefix = "scripts/"
+
+  /** True if this task should ever use the spot/preemptible queue: either the WDL asked for
+    * `preemptible`, or a DynamoDB "spot_with_fallback" recommendation applies AND the task did not
+    * pin its own (non-default) `queueArn`. Merges the two previously-separate spot routing inputs. */
+  private[aws] lazy val spotEligible: Boolean =
+    runtimeAttributes.preemptible > 0 ||
+      (preemptibilityRecommendation.contains("spot_with_fallback") &&
+        (defaultQueueArn.isEmpty || runtimeAttributes.queueArn == defaultQueueArn))
+
+  /** Whether this attempt still routes to spot. `spotKillMaxRetries <= 0` disables spot entirely
+    * (the task runs on-demand). Otherwise the first `spotKillMaxRetries` attempts run on spot. */
+  private[aws] def stillOnSpot: Boolean =
+    runtimeAttributes.spotKillMaxRetries > 0 && spotKillCount < runtimeAttributes.spotKillMaxRetries
+
+  /** Pure queue decision — the single source of truth for routing (replaces the old `forceOnDemand`
+    * flag and the if/else chain): GPU -> gpu queue; else spot while eligible and under the spot
+    * budget; else the on-demand `queueArn`. */
+  private[aws] def resolvedJobQueue: String =
+    if (runtimeAttributes.gpuCount >= 1) runtimeAttributes.gpuQueueArn
+    else if (spotEligible && stillOnSpot) {
+      if (runtimeAttributes.preemptibleQueneArn.isBlank)
+        throw new RuntimeException(
+          s"Task '${jobDescriptor.taskCall.fullyQualifiedName}' is spot-eligible but 'preemptibleQueueArn' is not configured")
+      Log.info(s"Routing '${jobDescriptor.taskCall.fullyQualifiedName}' to spot queue " +
+        s"(spotKillCount=$spotKillCount, spotKillMaxRetries=${runtimeAttributes.spotKillMaxRetries})")
+      runtimeAttributes.preemptibleQueneArn
+    } else {
+      if (spotEligible)
+        Log.info(s"Routing '${jobDescriptor.taskCall.fullyQualifiedName}' to on-demand queue: spot budget reached " +
+          s"(spotKillCount=$spotKillCount >= spotKillMaxRetries=${runtimeAttributes.spotKillMaxRetries})")
+      runtimeAttributes.queueArn
+    }
 
   lazy val batchClient: BatchClient = {
     val builder = BatchClient.builder()
@@ -613,26 +645,8 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
             .build()
         )
         .tags(runtimeAttributes.additionalTags.asJava)
-        .jobQueue(runtimeAttributes.queueArn)
+        .jobQueue(resolvedJobQueue)
         .jobDefinition(definitionArn)
-
-      if (runtimeAttributes.gpuCount >= 1) {
-        submitJobRequest.jobQueue(runtimeAttributes.gpuQueueArn)
-      } else if (runtimeAttributes.preemptible > 0 && !forceOnDemand) {
-        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
-      } else if (preemptibilityRecommendation.contains("spot_with_fallback") && !forceOnDemand
-                 && (defaultQueueArn.isEmpty || runtimeAttributes.queueArn == defaultQueueArn)) {
-        if (runtimeAttributes.preemptibleQueneArn.isBlank)
-          throw new RuntimeException(
-            s"DynamoDB recommended 'spot_with_fallback' for '${jobDescriptor.taskCall.fullyQualifiedName}' " +
-            "but 'preemptibleQueueArn' is not configured for this task"
-          )
-        Log.info(s"Routing to spot queue per DynamoDB preemptibility recommendation for task ${jobDescriptor.taskCall.fullyQualifiedName}")
-        submitJobRequest.jobQueue(runtimeAttributes.preemptibleQueneArn)
-      } else if (forceOnDemand && (runtimeAttributes.preemptible > 0 || preemptibilityRecommendation.contains("spot_with_fallback"))) {
-        Log.info(s"Submitting to on-demand queue: spot reclamation threshold reached for task ${jobDescriptor.taskCall.fullyQualifiedName}")
-        submitJobRequest.jobQueue(runtimeAttributes.queueArn)
-      }
 
       val invalidCharsPattern = "[^a-zA-Z0-9_.:/=+-@]+".r
 
