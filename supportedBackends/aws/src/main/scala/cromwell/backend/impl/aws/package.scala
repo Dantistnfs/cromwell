@@ -4,7 +4,9 @@ import cats.data.ReaderT
 import com.google.common.io.BaseEncoding
 import cromwell.cloudsupport.aws.auth.AwsAuthMode
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
+import software.amazon.awssdk.core.client.builder.SdkSyncClientBuilder
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
+import software.amazon.awssdk.http.apache.ApacheHttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.batch.model.KeyValuePair
 
@@ -68,6 +70,11 @@ package object aws {
     * @tparam ClientT the type of the client that you will get back
     * @return a configured client for the AWS service
     */
+  // These clients are backend-wide singletons (see AwsBatchConfiguration), so a single client carries
+  // all concurrent submit/poll/log/dynamo load. The default Apache pool (50) would bottleneck a wide
+  // scatter, so raise it. Tunable; consider a config value if fleets diverge.
+  val MaxHttpConnections: Int = 250
+
   def configureClient[BuilderT <: AwsClientBuilder[BuilderT, ClientT], ClientT](builder: AwsClientBuilder[BuilderT, ClientT],
                                                                                awsAuthMode: Option[AwsAuthMode],
                                                                                configRegion: Option[Region]): ClientT = {
@@ -76,12 +83,28 @@ package object aws {
     }
     configRegion.foreach(builder.region)
 
+    // Bound the HTTP connection pool. `httpClientBuilder` lives on SdkSyncClientBuilder (all AWS clients
+    // used by this backend are synchronous); reach it via a type-test to avoid widening the generic bound
+    // (which breaks ClientT inference). Mutates the same builder in place. httpClientBuilder (not
+    // httpClient) so the SDK owns the client lifecycle; connectionAcquisitionTimeout lets callers wait for
+    // a connection under load rather than fail.
+    builder match {
+      case syncBuilder: SdkSyncClientBuilder[_, _] =>
+        syncBuilder.httpClientBuilder(
+          ApacheHttpClient.builder()
+            .maxConnections(MaxHttpConnections)
+            .connectionAcquisitionTimeout(Duration.ofSeconds(60))
+        )
+        ()
+      case _ => ()
+    }
+
     // Configure client with timeout settings that align with our retry policy
     // of 15 maximum retries with exponential backoff up to 60 seconds
     val overrideConfig = ClientOverrideConfiguration.builder()
       // Total timeout for a complete API call including all retries
       // 15 retries with a maximum of 60s delay each, plus some buffer
-      .apiCallTimeout(Duration.ofMinutes(20))  
+      .apiCallTimeout(Duration.ofMinutes(20))
       // Timeout for an individual attempt before retrying
       .apiCallAttemptTimeout(Duration.ofSeconds(60))
       // Add our custom interceptor to handle 429 retries with jittering

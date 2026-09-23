@@ -221,19 +221,15 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
       runtimeAttributes.additionalTags,
       spotKillCount = previousSpotKillCount,
       preemptibilityRecommendation = preemptibilityRecommendation,
-      defaultQueueArn = configuration.defaultQueueArn)
+      defaultQueueArn = configuration.defaultQueueArn,
+      batchClient = configuration.batchClient,
+      s3Client = configuration.s3Client,
+      cloudWatchLogsClient = configuration.cloudWatchLogsClient,
+      dynamoDbClient = configuration.dynamoDbClient)
   }
 
-  // setup batch client to query job container info
-  lazy val batchClient: BatchClient = {
-    val builder = BatchClient.builder()
-    configureClient(builder, batchJob.optAwsAuthMode, batchJob.configRegion)
-  }
-
-  override def postStop(): Unit = {
-    Try(batchJob.dynamoDbClient.close())
-    super.postStop()
-  }
+  // Batch client for detectFailureReasons — shared backend-wide singleton (see AwsBatchConfiguration).
+  def batchClient: BatchClient = configuration.batchClient
 
   /* Tries to abort the job in flight
    *

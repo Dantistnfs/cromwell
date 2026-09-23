@@ -96,6 +96,12 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
                              spotKillCount: Int = 0,
                              preemptibilityRecommendation: Option[String] = None,
                              defaultQueueArn: String = "",
+                             // Backend-wide shared SDK clients (see AwsBatchConfiguration). Passed in rather
+                             // than created per job to avoid the client/thread leak that crashes the JVM.
+                             batchClient: BatchClient,
+                             s3Client: S3Client,
+                             cloudWatchLogsClient: CloudWatchLogsClient,
+                             dynamoDbClient: DynamoDbClient,
                             ) {
 
 
@@ -135,24 +141,8 @@ final case class AwsBatchJob(jobDescriptor: BackendJobDescriptor, // WDL/CWL
       runtimeAttributes.queueArn
     }
 
-  lazy val batchClient: BatchClient = {
-    val builder = BatchClient.builder()
-    configureClient(builder, optAwsAuthMode, configRegion)
-  }
-  lazy val cloudWatchLogsClient: CloudWatchLogsClient = {
-    val builder = CloudWatchLogsClient.builder()
-    configureClient(builder, optAwsAuthMode, configRegion)
-  }
-
-  lazy val s3Client: S3Client = {
-    val builder = S3Client.builder()
-    configureClient(builder, optAwsAuthMode, configRegion)
-  }
-
-  // One client per job instance — status() is polled repeatedly so per-call construction is too expensive.
-  // Closed explicitly in AwsBatchAsyncBackendJobExecutionActor.postStop().
-  lazy val dynamoDbClient: DynamoDbClient =
-    configureClient(DynamoDbClient.builder(), optAwsAuthMode, configRegion)
+  // batchClient / cloudWatchLogsClient / s3Client / dynamoDbClient are now backend-wide singletons
+  // supplied via the constructor (see AwsBatchConfiguration) — not created per job.
 
 
   /**
