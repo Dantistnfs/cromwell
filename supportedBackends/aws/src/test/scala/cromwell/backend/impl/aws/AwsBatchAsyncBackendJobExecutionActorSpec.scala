@@ -62,6 +62,8 @@ import org.scalatest.matchers.should.Matchers
 import org.slf4j.Logger
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider
 import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.batch.model.BatchException
+import software.amazon.awssdk.core.exception.SdkClientException
 import spray.json._
 import wdl.draft2.model._
 import wdl.transforms.draft2.wdlom2wom.WdlDraft2WomExecutableMakers._
@@ -296,6 +298,39 @@ class AwsBatchAsyncBackendJobExecutionActorSpec extends TestKitSuite
   behavior of "AwsBatchAsyncBackendJobExecutionActor"
 
   private val timeout = 25 seconds
+
+  // Retry-correctness: what happens when a *status poll* (describeJobs) hits a transient server-side error?
+  // `isFatal` is the gate: false => handlePollFailure returns the SAME handle (keep polling, job survives);
+  // true => it returns a FailedNonRetryableExecutionHandle, which becomes a terminal JobFailedNonRetryableResponse
+  // and does NOT go through retryElseFail/maxRetries. This test pins that behavior down empirically.
+  it should "keep polling on transient server-side poll errors rather than failing the job" in {
+    val backend = buildTestActorRef(TestableAwsBatchExpressionFunctions).underlyingActor
+    val runId = StandardAsyncJob(UUID.randomUUID().toString)
+    val handle = new AwsBatchPendingExecutionHandle(null, runId, None, None)
+
+    val throttle429 = BatchException.builder().statusCode(429).message("Rate exceeded").build()
+    val batch500 = BatchException.builder().statusCode(500).message("Internal failure").build()
+    val batch403 = BatchException.builder().statusCode(403).message("Access denied").build()
+    val poolTimeout = SdkClientException.create("Unable to execute HTTP request: Timeout waiting for connection from pool")
+    val connReset = SdkClientException.create("Unable to execute HTTP request: Connection reset")
+
+    // Transient server-side failures must NOT be fatal — a failed status *check* should retry the poll, not
+    // kill a job that is still running on Batch. These are the assertions that matter for Quek's question.
+    backend.isFatal(throttle429) shouldBe false // throttling
+    backend.isFatal(batch500) shouldBe false // server error (5xx)
+    backend.isFatal(poolTimeout) shouldBe false // connection-pool timeout
+    backend.isFatal(connReset) shouldBe false // dropped connection
+    // ...but genuine service errors (auth / bad request / not found) MUST stay fatal so we don't poll forever.
+    backend.isFatal(batch403) shouldBe true
+
+    // End-to-end through the poll path: a transient error returns the SAME handle (poll again); a genuine
+    // error returns a FailedNonRetryableExecutionHandle (which becomes a terminal job failure).
+    backend.handlePollFailure(handle, throttle429) should be theSameInstanceAs handle
+    backend.handlePollFailure(handle, batch500) should be theSameInstanceAs handle
+    backend.handlePollFailure(handle, poolTimeout) should be theSameInstanceAs handle
+    backend.handlePollFailure(handle, connReset) should be theSameInstanceAs handle
+    backend.handlePollFailure(handle, batch403).isInstanceOf[FailedNonRetryableExecutionHandle] shouldBe true
+  }
 
 //   { // Set of "handle call failures appropriately with respect to preemption and failure" tests
 //     val expectations = Table(

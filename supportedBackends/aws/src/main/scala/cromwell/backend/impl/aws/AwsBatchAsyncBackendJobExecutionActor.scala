@@ -64,6 +64,8 @@ import cromwell.backend.impl.aws.AwsBatchBackendLifecycleActorFactory.SpotKillCo
 import org.slf4j.{Logger, LoggerFactory}
 import software.amazon.awssdk.services.batch.BatchClient
 import software.amazon.awssdk.services.batch.model._
+import software.amazon.awssdk.awscore.exception.AwsServiceException
+import software.amazon.awssdk.core.exception.SdkClientException
 import wom.callable.Callable.OutputDefinition
 import wom.core.FullyQualifiedName
 import wom.expression.NoIoFunctionSet
@@ -829,9 +831,15 @@ class AwsBatchAsyncBackendJobExecutionActor(override val standardParams: Standar
     }
   }
 
-  // Despite being a "runtime" exception, BatchExceptions for 429 (too many requests) are *not* fatal:
+  // A failed status *check* (or submit) must not kill a job that is still running on Batch. Treat transient
+  // server-side errors as non-fatal so the poll/submit is retried: throttling (429), server errors (5xx), and
+  // any client-side connection/IO failure (SdkClientException — e.g. a connection-pool timeout or reset from
+  // the shared client under load). Genuine service errors (auth / bad request / job-not-found, i.e. other 4xx)
+  // stay fatal so we don't poll forever. Previously ALL non-429 AWS exceptions were fatal, so a single
+  // transient poll error would fail the job with no retry (SINFRA server-issue-not-retried gap).
   override def isFatal(throwable: Throwable): Boolean = throwable match {
-    case be: BatchException => !be.getMessage.contains("Status Code: 429")
+    case e: AwsServiceException => !(e.statusCode() == 429 || e.statusCode() >= 500 || e.isThrottlingException)
+    case _: SdkClientException => false
     case _ => super.isFatal(throwable)
   }
 
