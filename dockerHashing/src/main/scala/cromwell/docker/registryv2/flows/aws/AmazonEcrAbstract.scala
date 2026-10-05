@@ -1,10 +1,13 @@
 package cromwell.docker.registryv2.flows.aws
 
+import cats.data.NonEmptyList
 import cats.effect.IO
 import cromwell.docker.{DockerHashResult, DockerImageIdentifier, DockerInfoActor, DockerRegistryConfig}
 import cromwell.docker.registryv2.DockerRegistryV2Abstract
+import cromwell.docker.registryv2.DockerRegistryV2Abstract.AcceptAllManifestsHeader
 import cromwell.docker.registryv2.flows.aws.EcrUtils.{EcrForbidden, EcrNotFound, EcrUnauthorized}
 import org.apache.commons.codec.digest.DigestUtils
+import org.http4s.headers.Accept
 import org.http4s.{Header, Response, Status}
 import org.slf4j.{Logger, LoggerFactory}
 
@@ -27,6 +30,13 @@ abstract class AmazonEcrAbstract(override val config: DockerRegistryConfig) exte
     logger.warn("A call has been made to buildTokenRequestHeaders for an ECR container but ECR auth should be done via SDK. This call will be ignored")
     List.empty
   }
+
+  /**
+    * Advertise every manifest media type in a single request. ECR only returns the stored manifest verbatim
+    * (so sha256(body) == ECR's imageDigest) when all types are listed; asking for Docker v2 alone makes ECR
+    * convert an OCI manifest and hand back a digest that doesn't exist in the registry, failing the pull.
+    */
+  override protected def manifestAcceptHeaders: NonEmptyList[Accept] = NonEmptyList.of(AcceptAllManifestsHeader)
 
   /**
     * Amazon ECR repositories don't have a digest header in responses so we must make it from the manifest body
