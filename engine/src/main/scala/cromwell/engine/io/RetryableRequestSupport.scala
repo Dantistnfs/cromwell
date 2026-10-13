@@ -1,7 +1,7 @@
 package cromwell.engine.io
 
 import java.io.IOException
-import java.net.{SocketException, SocketTimeoutException}
+import java.net.{SocketException, SocketTimeoutException, UnknownHostException}
 import com.google.cloud.storage.StorageException
 import cromwell.engine.io.gcs.GcsBatchFlow.BatchFailedException
 import cromwell.engine.io.nio.ChecksumFailedException
@@ -25,11 +25,33 @@ object RetryableRequestSupport {
     case _: ChecksumFailedException => true
     case _: SocketException => true
     case _: SocketTimeoutException => true
+    case _: UnknownHostException => true
     case ioE: IOException if Option(ioE.getMessage).exists(_.contains("Error getting access token for service account")) => true
     case ioE: IOException => isGcs500(ioE) || isGcs503(ioE) || isGcs504(ioE) || isAws504(ioE)
     case other =>
-      // Infinitely retryable is a subset of retryable
-      isInfinitelyRetryable(other)
+      // A transient DNS resolution failure (UnknownHostException) is frequently wrapped by cloud SDKs
+      // in a non-IOException RuntimeException - notably AWS's SdkClientException - so the top-level type
+      // doesn't reveal it. Inspect the cause chain for that specific case only, to stay targeted.
+      hasUnknownHostCause(other) ||
+        // Infinitely retryable is a subset of retryable
+        isInfinitelyRetryable(other)
+  }
+
+  /**
+    * True if any throwable in the cause chain is a DNS resolution failure (UnknownHostException).
+    * Cloud SDKs commonly wrap these in their own RuntimeException (e.g. AWS's SdkClientException),
+    * so matching the top-level exception type alone is not enough. Deliberately narrow: only the DNS
+    * case is walked here; other network exception types are still matched by top-level type above.
+    */
+  def hasUnknownHostCause(failure: Throwable): Boolean = {
+    @scala.annotation.tailrec
+    def loop(t: Throwable, seen: Set[Throwable]): Boolean = t match {
+      case null => false
+      case _ if seen.contains(t) => false // guard against cyclic cause chains
+      case _: UnknownHostException => true
+      case _ => loop(t.getCause, seen + t)
+    }
+    loop(failure, Set.empty)
   }
 
   private val AdditionalRetryableHttpCodes = List(

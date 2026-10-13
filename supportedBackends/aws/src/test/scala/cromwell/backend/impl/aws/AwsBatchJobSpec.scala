@@ -48,6 +48,11 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider
 import software.amazon.awssdk.services.batch.model.{ContainerDetail, EvaluateOnExit, JobDetail, KeyValuePair, LinuxParameters, ResourceRequirement, RetryAction, RetryStrategy}
+import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.batch.BatchClient
+import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import spray.json.{JsObject, JsString}
 import wdl4s.parser.MemoryUnit
 import wom.format.MemorySize
@@ -145,25 +150,36 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
   val containerDetail: ContainerDetail = ContainerDetail.builder().exitCode(0).build()
   val jobDetail: JobDetail = JobDetail.builder().container(containerDetail).build
 
+  // Shared SDK clients for constructing AwsBatchJob in tests. Built once; no test path invokes them
+  // (these specs exercise routing / reconfiguredScript / recommendation, not AWS calls).
+  private val testRegion: Region = Region.US_EAST_1
+  private lazy val testBatchClient: BatchClient = BatchClient.builder().region(testRegion).build()
+  private lazy val testS3Client: S3Client = S3Client.builder().region(testRegion).build()
+  private lazy val testCwlClient: CloudWatchLogsClient = CloudWatchLogsClient.builder().region(testRegion).build()
+  private lazy val testDdbClient: DynamoDbClient = DynamoDbClient.builder().region(testRegion).build()
+
   private def generateBasicJob: AwsBatchJob = {
     val job = AwsBatchJob(jobDescriptor, runtimeAttributes, "commandLine", script,
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
-      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String])
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
+      batchClient = testBatchClient, s3Client = testS3Client, cloudWatchLogsClient = testCwlClient, dynamoDbClient = testDdbClient)
     job
   }
   private def generateBasicJobForLocalFS: AwsBatchJob = {
     val job = AwsBatchJob(jobDescriptor, runtimeAttributes.copy(fileSystem="local"), "commandLine", script,
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
-      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String])
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
+      batchClient = testBatchClient, s3Client = testS3Client, cloudWatchLogsClient = testCwlClient, dynamoDbClient = testDdbClient)
     job
   }
   private def generateJobWithS3InOut: AwsBatchJob = {
     val job = AwsBatchJob(jobDescriptor, runtimeAttributes, "commandLine", script,
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       s3Inputs, s3Outputs,
-      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String])
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
+      batchClient = testBatchClient, s3Client = testS3Client, cloudWatchLogsClient = testCwlClient, dynamoDbClient = testDdbClient)
     job
   }
 
@@ -516,14 +532,79 @@ class AwsBatchJobSpec extends TestKitSuite with AnyFlatSpecLike with Matchers wi
       "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
       Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
       jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
-      forceOnDemand = false,
-      preemptibilityRecommendation = Some("spot_with_fallback"))
+      spotKillCount = 0,
+      preemptibilityRecommendation = Some("spot_with_fallback"),
+      batchClient = testBatchClient, s3Client = testS3Client, cloudWatchLogsClient = testCwlClient, dynamoDbClient = testDdbClient)
     job.preemptibilityRecommendation should be(Some("spot_with_fallback"))
   }
 
   it should "store no preemptibilityRecommendation when not provided" in {
     val job = generateBasicJob
     job.preemptibilityRecommendation should be(None)
+  }
+
+  // ---- queue routing (resolvedJobQueue) ----
+
+  private val onDemandArn = runtimeAttributes.queueArn
+  private val spotArn = "arn:aws:batch:us-east-1:123456789:job-queue/spot"
+  private val gpuArn = "arn:aws:batch:us-east-1:123456789:job-queue/gpu"
+
+  private def jobWith(ra: AwsBatchRuntimeAttributes,
+                      spotKillCount: Int = 0,
+                      recommendation: Option[String] = None,
+                      defaultQueueArn: String = ""): AwsBatchJob =
+    AwsBatchJob(jobDescriptor, ra, "commandLine", script,
+      "/cromwell_root/hello-rc.txt", "/cromwell_root/hello-stdout.log", "/cromwell_root/hello-stderr.log",
+      Seq.empty[AwsBatchInput].toSet, Seq.empty[AwsBatchFileOutput].toSet,
+      jobPaths, Seq.empty[AwsBatchParameter], None, None, None, None, None, None, None, logGroupName, Map.empty[String, String],
+      spotKillCount = spotKillCount, preemptibilityRecommendation = recommendation, defaultQueueArn = defaultQueueArn,
+      batchClient = testBatchClient, s3Client = testS3Client, cloudWatchLogsClient = testCwlClient, dynamoDbClient = testDdbClient)
+
+  it should "route a preemptible task to spot while under spotKillMaxRetries, then to on-demand" in {
+    val ra = runtimeAttributes.copy(preemptible = 1, preemptibleQueneArn = spotArn, spotKillMaxRetries = 3)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(spotArn)
+    jobWith(ra, spotKillCount = 2).resolvedJobQueue should be(spotArn)
+    jobWith(ra, spotKillCount = 3).resolvedJobQueue should be(onDemandArn)
+    jobWith(ra, spotKillCount = 5).resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "honor a spot_with_fallback recommendation only when the task did not override queueArn" in {
+    val ra = runtimeAttributes.copy(preemptibleQueneArn = spotArn, spotKillMaxRetries = 3)
+    // queueArn == defaultQueueArn => not overridden => spot
+    jobWith(ra, recommendation = Some("spot_with_fallback"), defaultQueueArn = ra.queueArn)
+      .resolvedJobQueue should be(spotArn)
+    // queueArn != defaultQueueArn => task pinned its own queue => on-demand
+    jobWith(ra, recommendation = Some("spot_with_fallback"),
+      defaultQueueArn = "arn:aws:batch:us-east-1:123456789:job-queue/other")
+      .resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "always route GPU tasks to the gpu queue, never spot" in {
+    val ra = runtimeAttributes.copy(gpuCount = 1, gpuQueueArn = gpuArn, preemptible = 1, preemptibleQueneArn = spotArn)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(gpuArn)
+  }
+
+  it should "route to on-demand when spotKillMaxRetries is 0 (spot disabled)" in {
+    val ra = runtimeAttributes.copy(preemptible = 1, preemptibleQueneArn = spotArn, spotKillMaxRetries = 0)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "route non-spot-eligible tasks to on-demand" in {
+    val ra = runtimeAttributes.copy(preemptible = 0, spotKillMaxRetries = 3)
+    jobWith(ra, spotKillCount = 0).resolvedJobQueue should be(onDemandArn)
+  }
+
+  it should "throw when a spot-eligible task has a blank preemptibleQueueArn" in {
+    val ra = runtimeAttributes.copy(preemptible = 1, preemptibleQueneArn = "", spotKillMaxRetries = 3)
+    an[RuntimeException] should be thrownBy jobWith(ra, spotKillCount = 0).resolvedJobQueue
+  }
+
+  it should "use the passed-in shared SDK clients rather than creating per-job ones" in {
+    val job = generateBasicJob
+    job.batchClient should be theSameInstanceAs testBatchClient
+    job.s3Client should be theSameInstanceAs testS3Client
+    job.cloudWatchLogsClient should be theSameInstanceAs testCwlClient
+    job.dynamoDbClient should be theSameInstanceAs testDdbClient
   }
 
 }

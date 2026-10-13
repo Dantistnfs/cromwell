@@ -46,6 +46,25 @@ object DockerRegistryV2Abstract {
   val AcceptOCIIndexV1Header = Accept.parse(OCIIndexV1MediaType)
     .unsafe("Cannot parse invalid OCI index v1 Accept header. Please report this error.")
 
+  // Single-image OCI manifest (as opposed to the OCI index above). Produced by default by recent
+  // `docker buildx`/BuildKit builds. See https://github.com/opencontainers/image-spec/blob/main/manifest.md
+  val OCIManifestV1MediaType = "application/vnd.oci.image.manifest.v1+json"
+  val OCIManifestV1MediaRange = MediaRange.parse(OCIManifestV1MediaType)
+    .unsafe("Cannot parse invalid OCI manifest v1 content type. Please report this error.")
+
+  // A single Accept header that advertises every manifest media type we understand. Needed for Amazon ECR:
+  // when asked for only one media type (e.g. Docker v2), ECR *converts* a stored OCI manifest to Docker v2
+  // and returns a body whose sha256 is not the digest ECR has stored, which then fails at container pull.
+  // Advertising all types in one request makes ECR return the stored manifest verbatim.
+  val AcceptAllManifestsHeader = Accept.parse(
+    List(
+      DockerManifestV2MediaType,
+      DockerManifestListV2MediaType,
+      OCIManifestV1MediaType,
+      OCIIndexV1MediaType
+    ).mkString(", ")
+  ).unsafe("Cannot parse invalid combined manifest Accept header. Please report this error.")
+
   implicit val entityManifestDecoder = jsonEntityDecoder[DockerManifest](DockerManifestV2MediaRange)
   implicit val entityManifestListDecoder = jsonEntityDecoder[DockerManifestList](DockerManifestListV2MediaRange)
   implicit val entityTokenDecoder = jsonOf[IO, DockerAccessToken]
@@ -130,13 +149,24 @@ abstract class DockerRegistryV2Abstract(override val config: DockerRegistryConfi
     * @param client http client
     * @return docker info response
     */
+  /**
+    * The `Accept` header(s) to try, in order, when requesting the image manifest. Each header is attempted
+    * in turn and the first request that succeeds is used. The default mirrors the historical behavior:
+    * request the Docker v2 manifest, then fall back to the OCI image index only if the first request errors.
+    * Subclasses that must advertise several media types in a single request (e.g. Amazon ECR) override this.
+    */
+  protected def manifestAcceptHeaders: NonEmptyList[Accept] =
+    NonEmptyList.of(AcceptDockerManifestV2Header, AcceptOCIIndexV1Header)
+
   protected def getDockerResponse(token: Option[String], dockerInfoContext: DockerInfoContext)(implicit client: Client[IO]): IO[DockerInfoSuccessResponse] = {
-    val requestDockerManifest = manifestRequest(token, dockerInfoContext.dockerImageID, AcceptDockerManifestV2Header)
-    lazy val requestOCIManifest = manifestRequest(token, dockerInfoContext.dockerImageID, AcceptOCIIndexV1Header)
-    def tryOCIManifest(err: Throwable) = executeRequest(requestOCIManifest, handleManifestResponse(dockerInfoContext, token))
-    // Try to execute a request using the Docker Manifest format, and if that fails, try using the newer OCI manifest format
-    executeRequest(requestDockerManifest, handleManifestResponse(dockerInfoContext, token))
-      .handleErrorWith(tryOCIManifest)
+    // One lazily-built attempt per Accept header, so a request is only constructed when it is actually tried.
+    val attempts: NonEmptyList[() => IO[DockerInfoSuccessResponse]] = manifestAcceptHeaders.map { header => () =>
+      executeRequest(manifestRequest(token, dockerInfoContext.dockerImageID, header), handleManifestResponse(dockerInfoContext, token))
+    }
+    // Try each attempt in order, falling back to the next only if the previous one errors.
+    attempts.tail.foldLeft(attempts.head.apply()) { (previous, next) =>
+      previous.handleErrorWith(_ => next())
+    }
   }
 
   /**
@@ -204,13 +234,21 @@ abstract class DockerRegistryV2Abstract(override val config: DockerRegistryConfi
   }
 
   /**
+    * The repository path used in the manifest URI (`/v2/<repository path>/manifests/<reference>`).
+    * Defaults to Docker Hub semantics, where an image without a repository lives under "library/".
+    * Registries without an implicit "library/" namespace (e.g. Amazon ECR) override this.
+    */
+  protected def manifestRepositoryPath(dockerImageID: DockerImageIdentifier): String =
+    dockerImageID.nameWithDefaultRepository
+
+  /**
     * Builds the manifest URI to be queried based on a DockerImageID
     */
   private def buildManifestUri(dockerImageID: DockerImageIdentifier): Uri = {
     Uri.apply(
       scheme = Option(Scheme.https),
       authority = Option(Authority(host = Uri.RegName(registryHostName(dockerImageID)))),
-      path = s"/v2/${dockerImageID.nameWithDefaultRepository}/manifests/${dockerImageID.reference}"
+      path = s"/v2/${manifestRepositoryPath(dockerImageID)}/manifests/${dockerImageID.reference}"
     )
   }
 
@@ -218,7 +256,7 @@ abstract class DockerRegistryV2Abstract(override val config: DockerRegistryConfi
     * Request to get the manifest, using the auth token if provided
     */
   private def manifestRequest(token: Option[String], imageId: DockerImageIdentifier, manifestHeader: Accept): IO[Request[IO]] = {
-    val authorizationHeader = token.map(t => Authorization(Credentials.Token(AuthScheme.Bearer, t)))
+    val authorizationHeader = token.map(t => Authorization(Credentials.Token(authorizationScheme, t)))
     val request = Method.GET(
       buildManifestUri(imageId),
       List(

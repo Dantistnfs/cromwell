@@ -34,4 +34,25 @@ class DockerRegistryV2AbstractSpec extends AnyFlatSpec with CromwellTimeoutSpec 
     val result = registry.run(context)(mockClient).unsafeRunSync()
     result.asInstanceOf[(DockerInfoFailedResponse, DockerInfoContext)]._1.reason shouldBe "Failed to get docker hash for ubuntu:latest Malformed message body: Invalid JSON: empty body"
   }
+
+  it should "keep Docker Hub's implicit library/ repository in the manifest path by default" in {
+    val registry = new DockerRegistryV2Abstract(DockerRegistryConfig.default) {
+      override protected def registryHostName(dockerImageIdentifier: DockerImageIdentifier) = "registry-1.docker.io"
+      override protected def authorizationServerHostName(dockerImageIdentifier: DockerImageIdentifier) = "auth.docker.io"
+      override protected def buildTokenRequestHeaders(dockerInfoContext: DockerInfoActor.DockerInfoContext) = List.empty
+      override protected def getToken(dockerInfoContext: DockerInfoContext)(implicit client: Client[IO]) = IO.pure(None)
+    }
+
+    val paths = scala.collection.mutable.ListBuffer.empty[String]
+    val capturingClient = Client({ req: Request[IO] =>
+      paths += req.uri.path
+      Resource.pure[IO, Response[IO]](Response[IO](status = Status.NotFound)) : Resource[IO, Response[IO]]
+    })
+
+    val context = DockerInfoContext(DockerInfoRequest(DockerImageIdentifier.fromString("ubuntu:22.04").get), null)
+    registry.run(context)(capturingClient).unsafeRunSync()
+
+    // Docker v2 attempt, then the OCI index fallback - both under library/
+    paths.toList shouldEqual List("/v2/library/ubuntu/manifests/22.04", "/v2/library/ubuntu/manifests/22.04")
+  }
 }

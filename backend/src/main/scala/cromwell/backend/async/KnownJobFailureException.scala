@@ -17,6 +17,14 @@ final case class UnExpectedStatus(jobTag: String, returnCode: Int, jobStatus: St
   override def getMessage = s"Job $jobTag exited with success code '$returnCode' but failed status '$jobStatus'. Suspecting spot kill and retrying."
 }
 
+final case class SpotReclaimed(jobTag: String, spotKillCount: Int, stderrPath: Option[Path]) extends KnownJobFailureException {
+  override def getMessage = s"Job $jobTag was reclaimed from a spot/preemptible instance (reclamation #$spotKillCount). Retrying on the next attempt."
+}
+
+final case class TooManySpotReclamations(jobTag: String, spotKillCount: Int, spotKillMaxRetries: Int, stderrPath: Option[Path]) extends KnownJobFailureException {
+  override def getMessage = s"Job $jobTag was reclaimed from spot/preemptible instances $spotKillCount time(s) (spotKillMaxRetries=$spotKillMaxRetries), exceeding the spot-reclamation budget after escalating to the on-demand queue. Failing."
+}
+
 final case class ReturnCodeIsNotAnInt(jobTag: String, returnCode: String, stderrPath: Option[Path]) extends KnownJobFailureException {
   override def getMessage = {
     if (returnCode.isEmpty)

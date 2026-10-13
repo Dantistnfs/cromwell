@@ -37,6 +37,9 @@ import cromwell.core.{BackendDockerConfiguration}
 import cromwell.core.path.PathBuilderFactory
 import cromwell.cloudsupport.aws.AwsConfiguration
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.batch.BatchClient
+import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient
 
 class AwsBatchConfiguration(val configurationDescriptor: BackendConfigurationDescriptor) {
 
@@ -85,6 +88,20 @@ class AwsBatchConfiguration(val configurationDescriptor: BackendConfigurationDes
     preemptibilityTableName.map { _ =>
       configureClient(DynamoDbClient.builder(), Option(awsAuth), awsConfig.region)
     }
+
+  // Backend-wide singleton AWS SDK clients. Previously these were created per AwsBatchJob (per job
+  // attempt), so a wide scatter spawned thousands of clients — each with its own sdk-ScheduledExecutor
+  // and HTTP pool — exhausting the process memory-map limit (vm.max_map_count) and crashing the JVM.
+  // Sharing bounds the client/thread count to O(1) for the whole backend. Lifetime = backend/JVM,
+  // same as preemptibilityDynamoDbClient (no explicit close).
+  lazy val batchClient: BatchClient =
+    configureClient(BatchClient.builder(), Option(awsAuth), awsConfig.region)
+  lazy val s3Client: S3Client =
+    configureClient(S3Client.builder(), Option(awsAuth), awsConfig.region)
+  lazy val cloudWatchLogsClient: CloudWatchLogsClient =
+    configureClient(CloudWatchLogsClient.builder(), Option(awsAuth), awsConfig.region)
+  lazy val dynamoDbClient: DynamoDbClient =
+    configureClient(DynamoDbClient.builder(), Option(awsAuth), awsConfig.region)
 }
 
 object AWSBatchStorageSystems {

@@ -11,7 +11,7 @@ import software.amazon.awssdk.services.batch.model.SubmitJobResponse
 
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Promise}
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 /**
  * An actor that receives requests to submit jobs to, schedule work on, and check for work on the work queue
@@ -40,13 +40,25 @@ class IntervalLimitedAwsJobSubmitActor(configRegion: Option[Region]) extends Act
 
     case CheckForWork => workQueue.headOption match {
       case Some(SubmitAwsJobRequest(batchJob, attributes, completionPromise)) =>
-        batchJob.submitJob[IO]().run(attributes).unsafeToFuture() onComplete {
-          case Success(value) =>
-            completionPromise.success(value)
-            scheduleWorkCheck(WorkInterval)
+        // `batchJob.submitJob[IO]()` eagerly performs S3 script-staging, so building it can throw
+        // *synchronously* (e.g. a transient UnknownHostException that outlasts our S3 retries). If
+        // such a throw escaped here, `completionPromise` would never complete and the job would hang
+        // forever in "Running" with no jobId (SINFRA orphaned-job incident). Guard so the promise is
+        // ALWAYS completed; the resulting failure is non-fatal, so Cromwell retries the job normally.
+        Try(batchJob.submitJob[IO]().run(attributes).unsafeToFuture()) match {
+          case Success(future) =>
+            future onComplete {
+              case Success(value) =>
+                completionPromise.success(value)
+                scheduleWorkCheck(WorkInterval)
+              case Failure(error) =>
+                completionPromise.failure(error)
+                log.error(error, s"Submission of new AWS job failed")
+                scheduleWorkCheck(WorkInterval)
+            }
           case Failure(error) =>
             completionPromise.failure(error)
-            log.error(error, s"Submission of new AWS job failed")
+            log.error(error, s"Submission of new AWS job failed synchronously during preparation")
             scheduleWorkCheck(WorkInterval)
         }
         workQueue = workQueue.tail
