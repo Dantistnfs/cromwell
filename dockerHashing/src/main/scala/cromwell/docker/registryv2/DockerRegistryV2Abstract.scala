@@ -234,13 +234,21 @@ abstract class DockerRegistryV2Abstract(override val config: DockerRegistryConfi
   }
 
   /**
+    * The repository path used in the manifest URI (`/v2/<repository path>/manifests/<reference>`).
+    * Defaults to Docker Hub semantics, where an image without a repository lives under "library/".
+    * Registries without an implicit "library/" namespace (e.g. Amazon ECR) override this.
+    */
+  protected def manifestRepositoryPath(dockerImageID: DockerImageIdentifier): String =
+    dockerImageID.nameWithDefaultRepository
+
+  /**
     * Builds the manifest URI to be queried based on a DockerImageID
     */
   private def buildManifestUri(dockerImageID: DockerImageIdentifier): Uri = {
     Uri.apply(
       scheme = Option(Scheme.https),
       authority = Option(Authority(host = Uri.RegName(registryHostName(dockerImageID)))),
-      path = s"/v2/${dockerImageID.nameWithDefaultRepository}/manifests/${dockerImageID.reference}"
+      path = s"/v2/${manifestRepositoryPath(dockerImageID)}/manifests/${dockerImageID.reference}"
     )
   }
 
